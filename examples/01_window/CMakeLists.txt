@@ -1,4 +1,4 @@
 add_executable(01_window main.cpp)
-# Raw GLFW/glad for now — the engine Window class arrives in Phase 1, at
-# which point examples will stop linking these directly.
+# glad/glfw linked directly: the example calls glClear and uses GLFW key
+# codes itself (liminal links them PRIVATE).
 target_link_libraries(01_window PRIVATE liminal::liminal glfw glad_gl)

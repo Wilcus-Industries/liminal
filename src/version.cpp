@@ -1,5 +1,4 @@
-// Placeholder translation unit so the static library has something to link.
-// Real engine sources land in Phase 1.
+// version.cpp — the engine version string, from the configured header.
 #include <liminal/liminal.hpp>
 
 namespace liminal {

@@ -56,15 +56,47 @@ target_link_libraries(liminal_imgui PUBLIC glfw)
 add_library(liminal::imgui ALIAS liminal_imgui)
 
 # ---------------------------------------------------------------------------
+# Default "retro" shader pack, embedded as string literals at configure time
+# so the Renderer's default ctor never touches the filesystem.
+# ---------------------------------------------------------------------------
+set(LIMINAL_RETRO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/retro)
+file(READ ${LIMINAL_RETRO_DIR}/dream.vert LIMINAL_RETRO_SCENE_VERT)
+file(READ ${LIMINAL_RETRO_DIR}/dream.frag LIMINAL_RETRO_SCENE_FRAG)
+file(READ ${LIMINAL_RETRO_DIR}/blit.vert  LIMINAL_RETRO_BLIT_VERT)
+file(READ ${LIMINAL_RETRO_DIR}/blit.frag  LIMINAL_RETRO_BLIT_FRAG)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/render/embedded_shaders.hpp.in
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.hpp
+    @ONLY)
+# file(READ) leaves no configure dependency; declare one so editing a shader
+# regenerates the embed without a manual re-configure.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${LIMINAL_RETRO_DIR}/dream.vert
+    ${LIMINAL_RETRO_DIR}/dream.frag
+    ${LIMINAL_RETRO_DIR}/blit.vert
+    ${LIMINAL_RETRO_DIR}/blit.frag)
+
+# ---------------------------------------------------------------------------
 # liminal: the engine static library.
 # ---------------------------------------------------------------------------
 add_library(liminal STATIC
-    src/placeholder.cpp)
+    src/version.cpp
+    src/core/assets.cpp
+    src/core/window.cpp
+    src/render/shader.cpp
+    src/render/mesh.cpp
+    src/render/texture.cpp
+    src/render/renderer.cpp
+    src/audio/audio.cpp
+    src/ui/imgui_layer.cpp)
 add_library(liminal::liminal ALIAS liminal)
 
 target_include_directories(liminal PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_BINARY_DIR}/include)
+# Generated embeds are an implementation detail — private.
+target_include_directories(liminal PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 target_compile_definitions(liminal PUBLIC
     LIMINAL_GL_MAJOR=${LIMINAL_GL_MAJOR}
