@@ -13,6 +13,7 @@ option(LIMINAL_WITH_INFERENCE "Build with llama.cpp local inference" ON)
 option(LIMINAL_WITH_SCRIPTING "Build with Lua 5.4 + sol2 scripting" ON)
 option(LIMINAL_BUILD_EDITOR   "Build the editor (pulls ImGuizmo)" ${PROJECT_IS_TOP_LEVEL})
 option(LIMINAL_BUILD_EXAMPLES "Build example programs" ${PROJECT_IS_TOP_LEVEL})
+option(LIMINAL_BUILD_TESTS    "Build headless tests (ctest)" ${PROJECT_IS_TOP_LEVEL})
 
 # ---------------------------------------------------------------------------
 # Platform → OpenGL version selection.
@@ -50,8 +51,9 @@ add_library(liminal_imgui STATIC
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
 target_include_directories(liminal_imgui PUBLIC
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends)
+    $<BUILD_INTERFACE:${imgui_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${imgui_SOURCE_DIR}/backends>
+    $<INSTALL_INTERFACE:include/liminal-imgui>)
 target_link_libraries(liminal_imgui PUBLIC glfw)
 add_library(liminal::imgui ALIAS liminal_imgui)
 
@@ -105,8 +107,9 @@ add_library(liminal STATIC
 add_library(liminal::liminal ALIAS liminal)
 
 target_include_directories(liminal PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_BINARY_DIR}/include)
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
 # Generated embeds are an implementation detail — private.
 target_include_directories(liminal PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -156,4 +159,170 @@ endif()
 
 if(LIMINAL_BUILD_EDITOR)
     add_subdirectory(editor)
+endif()
+
+if(LIMINAL_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
+# ---------------------------------------------------------------------------
+# install / export — `find_package(liminal CONFIG)` support.
+# Every dependency arrived via FetchContent, so the installed package bundles
+# them: the third-party targets join our export set and their headers install
+# under the prefix, making the package self-contained (no system deps beyond
+# Threads and the OS frameworks named as strings in link interfaces).
+# ---------------------------------------------------------------------------
+if(PROJECT_IS_TOP_LEVEL)
+    include(GNUInstallDirs)
+    include(CMakePackageConfigHelpers)
+
+    # Rewrites a target's INTERFACE_INCLUDE_DIRECTORIES so raw build/source
+    # paths become $<BUILD_INTERFACE:...> and consumers of the installed
+    # package look in ${dest}. install(EXPORT) refuses raw build paths.
+    function(liminal_exportable_includes tgt dest)
+        get_target_property(_incs ${tgt} INTERFACE_INCLUDE_DIRECTORIES)
+        if(NOT _incs)
+            set(_incs "")
+        endif()
+        set(_new "")
+        foreach(_d IN LISTS _incs)
+            if(_d MATCHES "^\\$<")
+                list(APPEND _new "${_d}")
+            else()
+                list(APPEND _new "$<BUILD_INTERFACE:${_d}>")
+            endif()
+        endforeach()
+        list(APPEND _new "$<INSTALL_INTERFACE:${dest}>")
+        set_target_properties(${tgt} PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${_new}")
+    endfunction()
+
+    liminal_exportable_includes(glad_gl include/liminal-glad)
+    liminal_exportable_includes(liminal_stb include/liminal-stb)
+
+    # Our own targets.
+    set(LIMINAL_EXPORT_TARGETS liminal liminal_imgui glad_gl liminal_stb)
+
+    # Third-party targets referenced from liminal's link interface (PUBLIC
+    # deps directly; PRIVATE deps as $<LINK_ONLY:...> — both must be in an
+    # export set or install(EXPORT) errors out).
+    foreach(_dep glfw glm glm-header-only nlohmann_json EnTT sol2 miniaudio)
+        if(TARGET ${_dep})
+            list(APPEND LIMINAL_EXPORT_TARGETS ${_dep})
+        endif()
+    endforeach()
+    if(TARGET miniaudio)
+        liminal_exportable_includes(miniaudio include/liminal-miniaudio)
+    endif()
+    if(LIMINAL_WITH_SCRIPTING AND TARGET lua_static)
+        # lua_static's link interface names Lua::lua_internal/Lua::lua_include,
+        # build-tree helper INTERFACE targets we don't export. Fold the
+        # include dirs lua_include carries directly into lua_static, then
+        # drop the helper references (nothing else in them matters to
+        # consumers of the static lib on this platform).
+        get_target_property(_lua_incs lua_include INTERFACE_INCLUDE_DIRECTORIES)
+        set(_lua_new "")
+        foreach(_d IN LISTS _lua_incs)
+            string(REGEX REPLACE "^\\$<BUILD_INTERFACE:(.*)>$" "\\1" _d "${_d}")
+            if(NOT _d MATCHES "INSTALL_INTERFACE")
+                list(APPEND _lua_new "$<BUILD_INTERFACE:${_d}>")
+            endif()
+        endforeach()
+        list(APPEND _lua_new "$<INSTALL_INTERFACE:include/liminal-lua>")
+        set_target_properties(lua_static PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${_lua_new}"
+            INTERFACE_LINK_LIBRARIES "")
+        list(APPEND LIMINAL_EXPORT_TARGETS lua_static)
+    endif()
+    if(LIMINAL_WITH_INFERENCE)
+        foreach(_dep llama ggml ggml-base ggml-cpu ggml-metal ggml-blas)
+            if(TARGET ${_dep})
+                liminal_exportable_includes(${_dep} include/liminal-llama)
+                # ggml lists PUBLIC_HEADERs by relative path, which resolves
+                # against OUR source dir in install(TARGETS) and breaks; we
+                # install the llama/ggml headers explicitly below instead.
+                set_target_properties(${_dep} PROPERTIES PUBLIC_HEADER "")
+                list(APPEND LIMINAL_EXPORT_TARGETS ${_dep})
+            endif()
+        endforeach()
+    endif()
+
+    install(TARGETS ${LIMINAL_EXPORT_TARGETS}
+        EXPORT liminalTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        # llama/ggml declare PUBLIC_HEADERs; we install all dep headers
+        # explicitly below, so just give them a harmless destination.
+        PUBLIC_HEADER DESTINATION include/liminal-llama)
+
+    # --- headers -------------------------------------------------------------
+    install(DIRECTORY include/liminal DESTINATION include
+        PATTERN "*.in" EXCLUDE)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/liminal/version.hpp
+        DESTINATION include/liminal)
+    # imgui (both core and backend headers were on one include path).
+    file(GLOB _imgui_headers ${imgui_SOURCE_DIR}/*.h)
+    install(FILES ${_imgui_headers}
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.h
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.h
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3_loader.h
+        DESTINATION include/liminal-imgui)
+    # header-only public deps.
+    install(DIRECTORY ${glm_SOURCE_DIR}/glm DESTINATION include
+        FILES_MATCHING PATTERN "*.hpp" PATTERN "*.inl" PATTERN "*.h")
+    install(DIRECTORY ${json_SOURCE_DIR}/include/nlohmann DESTINATION include)
+    install(DIRECTORY ${entt_SOURCE_DIR}/src/entt DESTINATION include
+        FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h")
+    if(LIMINAL_WITH_SCRIPTING)
+        install(DIRECTORY ${sol2_SOURCE_DIR}/include/sol DESTINATION include)
+        get_target_property(_lua_incs lua_static INTERFACE_INCLUDE_DIRECTORIES)
+        foreach(_d IN LISTS _lua_incs)
+            if(NOT _d MATCHES "INSTALL_INTERFACE")
+                string(REGEX REPLACE "^\\$<BUILD_INTERFACE:(.*)>$" "\\1" _d "${_d}")
+                install(DIRECTORY ${_d}/ DESTINATION include/liminal-lua
+                    FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
+            endif()
+        endforeach()
+    endif()
+    # glfw public headers (liminal_imgui links glfw PUBLIC).
+    install(DIRECTORY ${glfw_SOURCE_DIR}/include/GLFW DESTINATION include)
+    # glad's generated loader headers.
+    get_target_property(_glad_incs glad_gl INTERFACE_INCLUDE_DIRECTORIES)
+    foreach(_d IN LISTS _glad_incs)
+        string(REGEX REPLACE "^\\$<BUILD_INTERFACE:(.*)>$" "\\1" _d "${_d}")
+        if(NOT _d MATCHES "INSTALL_INTERFACE")
+            install(DIRECTORY ${_d}/ DESTINATION include/liminal-glad)
+        endif()
+    endforeach()
+    install(FILES ${stb_SOURCE_DIR}/stb_image.h
+        DESTINATION include/liminal-stb)
+    if(TARGET miniaudio)
+        install(FILES ${miniaudio_SOURCE_DIR}/miniaudio.h
+            DESTINATION include/liminal-miniaudio)
+    endif()
+    if(LIMINAL_WITH_INFERENCE AND TARGET llama)
+        install(DIRECTORY ${llama_SOURCE_DIR}/include/
+            ${llama_SOURCE_DIR}/ggml/include/
+            DESTINATION include/liminal-llama
+            FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
+    endif()
+
+    # --- export + config -------------------------------------------------------
+    install(EXPORT liminalTargets
+        NAMESPACE liminal::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/liminal)
+    configure_package_config_file(
+        cmake/liminalConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/liminalConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/liminal)
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/liminalConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMinorVersion)
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/liminalConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/liminalConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/liminal)
 endif()

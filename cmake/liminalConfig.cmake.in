@@ -1,0 +1,15 @@
+@PACKAGE_INIT@
+
+# The installed liminal package is self-contained: every dependency that
+# arrived via FetchContent (glm, nlohmann_json, EnTT, sol2 + Lua, imgui,
+# glfw, glad, stb, miniaudio, llama.cpp) was compiled in or installed
+# alongside, and exported under the liminal:: namespace. The only outside
+# requirement is a threading library (and the OS frameworks named as plain
+# strings in the link interfaces).
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
+include("${CMAKE_CURRENT_LIST_DIR}/liminalTargets.cmake")
+
+check_required_components(liminal)
