@@ -1,5 +1,7 @@
 add_subdirectory(01_window)
 add_subdirectory(02_retro_cube)
 add_subdirectory(04_wfc_town)
-# 03 is reserved for the Phase 5 Lua example (03_scene_lua).
+if(LIMINAL_WITH_SCRIPTING)
+    add_subdirectory(03_scene_lua)
+endif()
 add_subdirectory(05_scene)
