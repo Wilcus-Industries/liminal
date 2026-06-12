@@ -40,8 +40,12 @@ struct ComponentOps {
     // from getRaw. Null = no inspector (Phase 6 editor shows name only).
     std::function<void(void* component)> inspectorDraw;
 
-    // Phase 5 placeholder: binds the component type into a Lua state. The
-    // void* will be the sol::state*; typed wiring lands with scripting.
+    // Binds the component's usertype into a Lua state (void* = sol::state*).
+    // ScriptHost calls every non-null luaBind at construction; binders should
+    // also register a pusher with liminal::luabind so
+    // entity:get_component("Name") can hand the component to Lua (see
+    // src/script/lua_bindings.cpp for the built-in pattern). Null = the
+    // component is not scriptable. Ignored when LIMINAL_WITH_SCRIPTING=OFF.
     void (*luaBind)(void* luaState) = nullptr;
 };
 

@@ -3,6 +3,9 @@
 #include <liminal/audio/audio.hpp>
 #include <liminal/scene/component_registry.hpp>
 #include <liminal/ui/imgui_layer.hpp>
+#if defined(LIMINAL_WITH_SCRIPTING)
+#include <liminal/script/script_host.hpp>
+#endif
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -21,6 +24,9 @@ App::App(const AppConfig& config) {
     }
     m_imgui = std::make_unique<ImGuiLayer>(*m_window);
     registerBuiltinComponents();
+#if defined(LIMINAL_WITH_SCRIPTING)
+    m_scripts = std::make_unique<ScriptHost>(m_window.get());
+#endif
     m_lastTime = m_window->time();
 }
 
@@ -96,6 +102,13 @@ void App::run(const std::function<void(Frame&)>& frameFn) {
                         *m_renderer, m_assets, m_audio.get(), *this};
             frameFn(frame);
         }
+
+#if defined(LIMINAL_WITH_SCRIPTING)
+        // Scripts run after the user callback (so app code can stage state
+        // for them) and before the built-in render (so their mutations are
+        // visible the same frame).
+        m_scripts->update(m_scene, dt);
+#endif
 
         renderScene();
 

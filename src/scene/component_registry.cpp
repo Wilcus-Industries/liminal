@@ -8,6 +8,20 @@
 
 #include <imgui.h>
 
+#if defined(LIMINAL_WITH_SCRIPTING)
+// Defined in src/script/lua_bindings.cpp (compiled only when scripting is
+// ON, like this block). Declared here instead of including the sol2-heavy
+// header so this file stays scripting-agnostic.
+namespace liminal::luabind {
+void bindName(void* luaState);
+void bindTransform(void* luaState);
+void bindMeshRenderer(void* luaState);
+} // namespace liminal::luabind
+#define LIMINAL_LUABIND(fn) (&liminal::luabind::fn)
+#else
+#define LIMINAL_LUABIND(fn) nullptr
+#endif
+
 namespace liminal {
 
 ComponentRegistry& ComponentRegistry::instance() {
@@ -46,7 +60,8 @@ void registerName(ComponentRegistry& r) {
             char buf[256];
             std::snprintf(buf, sizeof(buf), "%s", c.value.c_str());
             if (ImGui::InputText("name", buf, sizeof(buf))) c.value = buf;
-        });
+        },
+        LIMINAL_LUABIND(bindName));
 }
 
 void registerTransform(ComponentRegistry& r) {
@@ -66,7 +81,8 @@ void registerTransform(ComponentRegistry& r) {
             ImGui::DragFloat3("position", &c.position.x, 0.05f);
             ImGui::DragFloat3("rotation (deg)", &c.rotationEuler.x, 1.0f);
             ImGui::DragFloat3("scale", &c.scale.x, 0.05f);
-        });
+        },
+        LIMINAL_LUABIND(bindTransform));
 }
 
 void registerMeshRenderer(ComponentRegistry& r) {
@@ -89,7 +105,8 @@ void registerMeshRenderer(ComponentRegistry& r) {
             std::snprintf(buf, sizeof(buf), "%s", c.textureAsset.c_str());
             if (ImGui::InputText("texture", buf, sizeof(buf))) c.textureAsset = buf;
             ImGui::ColorEdit4("color", &c.color.x);
-        });
+        },
+        LIMINAL_LUABIND(bindMeshRenderer));
 }
 
 void registerCamera(ComponentRegistry& r) {

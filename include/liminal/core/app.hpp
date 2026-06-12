@@ -41,6 +41,9 @@ namespace liminal {
 class Audio;
 class ImGuiLayer;
 class App;
+#if defined(LIMINAL_WITH_SCRIPTING)
+class ScriptHost;
+#endif
 
 struct AppConfig {
     std::string title = "liminal";
@@ -84,6 +87,11 @@ public:
     AssetCache& assets() { return m_assets; }
     Audio* audio() { return m_audio.get(); }       // may be null (see config)
     ImGuiLayer& imgui() { return *m_imgui; }
+#if defined(LIMINAL_WITH_SCRIPTING)
+    // Lua behavior for Script components; updated each frame between the
+    // user callback and the built-in scene render.
+    ScriptHost& scripts() { return *m_scripts; }
+#endif
 
 private:
     void renderScene(); // the built-in each<Transform, MeshRenderer> system
@@ -93,6 +101,9 @@ private:
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<Audio> m_audio;
     std::unique_ptr<ImGuiLayer> m_imgui;
+#if defined(LIMINAL_WITH_SCRIPTING)
+    std::unique_ptr<ScriptHost> m_scripts;
+#endif
     Scene m_scene;
     AssetCache m_assets;
     double m_lastTime = 0.0;

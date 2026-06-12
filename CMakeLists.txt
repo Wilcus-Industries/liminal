@@ -132,8 +132,11 @@ target_link_libraries(liminal
         miniaudio)
 
 if(LIMINAL_WITH_SCRIPTING)
-    # sol2 is header-only and appears in public engine headers eventually;
+    # sol2 is header-only and appears in <liminal/script/script_host.hpp>;
     # it needs the Lua headers/library alongside it.
+    target_sources(liminal PRIVATE
+        src/script/script_host.cpp
+        src/script/lua_bindings.cpp)
     target_link_libraries(liminal PUBLIC sol2::sol2 lua_static)
     target_compile_definitions(liminal PUBLIC LIMINAL_WITH_SCRIPTING=1)
 endif()

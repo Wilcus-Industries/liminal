@@ -39,6 +39,10 @@
 #include <liminal/inference/engine.hpp>
 #endif
 
+#ifdef LIMINAL_WITH_SCRIPTING
+#include <liminal/script/script_host.hpp>
+#endif
+
 namespace liminal {
 
 // Returns the engine version string, e.g. "0.1.0".

@@ -11,3 +11,6 @@ cmake-build-*/
 compile_commands.json
 .vscode/
 .idea/
+
+# Runtime scratch (examples write this in cwd)
+imgui.ini
