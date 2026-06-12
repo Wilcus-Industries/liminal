@@ -1,6 +1,6 @@
-# liminal
+# LIMINAL
 
-Liminal is a small C++20 game engine extracted from the game *Grey Matter*: OpenGL rendering (4.1 core on macOS, 4.6 elsewhere) over GLFW/glad, Dear ImGui (docking), GLM math, EnTT ECS, miniaudio, nlohmann/json, optional Lua 5.4 + sol2 scripting (`LIMINAL_WITH_SCRIPTING`), and optional local LLM inference via llama.cpp with Metal + Accelerate on Apple (`LIMINAL_WITH_INFERENCE`). All dependencies are fetched at configure time via CMake FetchContent.
+Liminal is a C++20 scriptable game engine local LLM inference using llama.cpp.
 
 ## Build
 

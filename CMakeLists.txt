@@ -88,6 +88,13 @@ add_library(liminal STATIC
     src/render/texture.cpp
     src/render/renderer.cpp
     src/audio/audio.cpp
+    src/procgen/tileset.cpp
+    src/procgen/wfc.cpp
+    src/procgen/terrain.cpp
+    src/procgen/terrain_field.cpp
+    src/procgen/layout_validator.cpp
+    src/procgen/shape_grammar.cpp
+    src/procgen/structure.cpp
     src/ui/imgui_layer.cpp)
 add_library(liminal::liminal ALIAS liminal)
 

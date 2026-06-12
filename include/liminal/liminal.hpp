@@ -16,6 +16,15 @@
 
 #include <liminal/audio/audio.hpp>
 
+#include <liminal/procgen/layout_validator.hpp>
+#include <liminal/procgen/rng.hpp>
+#include <liminal/procgen/shape_grammar.hpp>
+#include <liminal/procgen/structure.hpp>
+#include <liminal/procgen/terrain.hpp>
+#include <liminal/procgen/tileset.hpp>
+#include <liminal/procgen/types.hpp>
+#include <liminal/procgen/wfc.hpp>
+
 #include <liminal/ui/imgui_layer.hpp>
 
 #ifdef LIMINAL_WITH_INFERENCE
