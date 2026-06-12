@@ -1,0 +1,148 @@
+# ---------------------------------------------------------------------------
+# Liminal third-party dependencies, all via FetchContent.
+# The GLFW/glad/GLM/stb/ImGui/json/miniaudio/llama declares are transplanted
+# verbatim from Grey Matter (hard-won quirk comments included).
+# ---------------------------------------------------------------------------
+include(FetchContent)
+# Re-runs of cmake should not re-download anything.
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+
+# --- GLFW (windowing / input) ----------------------------------------------
+set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(glfw
+    GIT_REPOSITORY https://github.com/glfw/glfw
+    GIT_TAG        3.4
+    GIT_SHALLOW    TRUE)
+
+# --- glad2 (OpenGL function loader, generated at configure time) -----------
+# The generator is a Python tool (needs jinja2); any Python interpreter with
+# jinja2 installed works — pass -DPython_EXECUTABLE=/path/to/python if your
+# default python3 lacks it. REPRODUCIBLE pins the Khronos spec snapshot that
+# ships in the repo instead of fetching the latest one over the network.
+FetchContent_Declare(glad
+    GIT_REPOSITORY https://github.com/Dav1dde/glad
+    GIT_TAG        v2.0.8
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  cmake)
+
+# Fail early with a useful message if the chosen Python cannot import jinja2.
+# We try the default python3 first; it may work if jinja2 is installed
+# globally. Otherwise the user must point us at a suitable interpreter.
+find_package(Python COMPONENTS Interpreter REQUIRED)
+execute_process(
+    COMMAND "${Python_EXECUTABLE}" -c "import jinja2"
+    RESULT_VARIABLE LIMINAL_JINJA2_RC
+    OUTPUT_QUIET ERROR_QUIET)
+if(NOT LIMINAL_JINJA2_RC EQUAL 0)
+    message(FATAL_ERROR
+        "glad's loader generator needs a Python with the 'jinja2' package, "
+        "but '${Python_EXECUTABLE}' cannot import it.\n"
+        "Either `pip install jinja2` into that interpreter, or re-configure "
+        "with -DPython_EXECUTABLE=/path/to/python (e.g. a venv) that has it.")
+endif()
+
+# --- GLM (math) -------------------------------------------------------------
+FetchContent_Declare(glm
+    GIT_REPOSITORY https://github.com/g-truc/glm
+    GIT_TAG        1.0.3
+    GIT_SHALLOW    TRUE)
+
+# --- stb (stb_image.h) ------------------------------------------------------
+FetchContent_Declare(stb
+    GIT_REPOSITORY https://github.com/nothings/stb
+    GIT_SHALLOW    TRUE)
+
+# --- Dear ImGui (docking branch; no upstream CMake, we build it ourselves) --
+FetchContent_Declare(imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui
+    GIT_TAG        v1.92.8-docking
+    GIT_SHALLOW    TRUE)
+
+# --- nlohmann/json -----------------------------------------------------------
+FetchContent_Declare(json
+    URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz)
+
+# --- miniaudio (audio) -------------------------------------------------------
+set(MINIAUDIO_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(MINIAUDIO_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio
+    GIT_TAG        0.11.25
+    GIT_SHALLOW    TRUE)
+
+# --- EnTT (entity-component-system) ------------------------------------------
+FetchContent_Declare(entt
+    GIT_REPOSITORY https://github.com/skypjack/entt
+    GIT_TAG        v3.15.0
+    GIT_SHALLOW    TRUE)
+
+FetchContent_MakeAvailable(glfw glad glm stb imgui json miniaudio entt)
+
+# --- llama.cpp (local inference), static — gated by LIMINAL_WITH_INFERENCE ---
+if(LIMINAL_WITH_INFERENCE)
+    # Minimal embedded build: just the core `llama` library (which already
+    # contains the GBNF grammar engine). Metal + Accelerate default ON on Apple.
+    set(LLAMA_BUILD_COMMON   OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_APP      OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(llama
+        GIT_REPOSITORY https://github.com/ggml-org/llama.cpp
+        GIT_TAG        b9585
+        GIT_SHALLOW    TRUE)
+
+    # llama.cpp is C++17 code. Our top-level CMAKE_CXX_STANDARD=20 would leak
+    # into its targets, and under C++20 MSVC types u8"" literals as char8_t,
+    # which llama-chat.cpp does not compile against. Scope the standard down
+    # for llama only (plain variable — read at target creation time).
+    set(CMAKE_CXX_STANDARD 17)
+    FetchContent_MakeAvailable(llama)
+    set(CMAKE_CXX_STANDARD 20)
+endif()
+
+# --- Lua 5.4 + sol2 (scripting) — gated by LIMINAL_WITH_SCRIPTING ------------
+if(LIMINAL_WITH_SCRIPTING)
+    # walterschell/Lua wraps the upstream Lua 5.4 sources in a tidy CMake
+    # build; exposes target `lua_static`.
+    set(LUA_BUILD_BINARY  OFF CACHE BOOL "" FORCE)
+    set(LUA_BUILD_COMPILER OFF CACHE BOOL "" FORCE)
+    set(LUA_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(LUA_ENABLE_SHARED  OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(lua
+        GIT_REPOSITORY https://github.com/walterschell/Lua
+        GIT_TAG        v5.4.7
+        GIT_SHALLOW    TRUE)
+
+    set(SOL2_BUILD_LUA OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(sol2
+        GIT_REPOSITORY https://github.com/ThePhD/sol2
+        GIT_TAG        v3.5.0
+        GIT_SHALLOW    TRUE)
+
+    FetchContent_MakeAvailable(lua sol2)
+endif()
+
+# --- ImGuizmo (gizmos) — declared only; consumed in the editor phase ---------
+if(LIMINAL_BUILD_EDITOR)
+    # No upstream CMake build we use; we just populate the sources. The last
+    # release tag (1.83, 2021) predates ImGui 1.92 — the editor phase will
+    # likely need to pin a newer commit when wiring it up.
+    FetchContent_Declare(imguizmo
+        GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo
+        GIT_TAG        1.83
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(imguizmo)
+endif()
+
+# glad: generate a static loader for exactly the GL version we target.
+glad_add_library(glad_gl STATIC REPRODUCIBLE API gl:core=${LIMINAL_GL_MAJOR}.${LIMINAL_GL_MINOR})
+
+# stb is header-only; expose its directory.
+add_library(liminal_stb INTERFACE)
+target_include_directories(liminal_stb INTERFACE ${stb_SOURCE_DIR})

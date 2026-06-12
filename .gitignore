@@ -1,0 +1,13 @@
+# Build trees
+build/
+build-*/
+cmake-build-*/
+
+# Tooling caches
+.cache/
+.DS_Store
+
+# clangd / IDE artifacts
+compile_commands.json
+.vscode/
+.idea/

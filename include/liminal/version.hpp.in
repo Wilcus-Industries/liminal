@@ -1,0 +1,14 @@
+// Generated from version.hpp.in by CMake — do not edit.
+#pragma once
+
+#define LIMINAL_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define LIMINAL_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define LIMINAL_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define LIMINAL_VERSION_STRING "@PROJECT_VERSION@"
+
+namespace liminal {
+inline constexpr int kVersionMajor = LIMINAL_VERSION_MAJOR;
+inline constexpr int kVersionMinor = LIMINAL_VERSION_MINOR;
+inline constexpr int kVersionPatch = LIMINAL_VERSION_PATCH;
+inline constexpr const char* kVersionString = LIMINAL_VERSION_STRING;
+} // namespace liminal
