@@ -81,8 +81,14 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 # ---------------------------------------------------------------------------
 add_library(liminal STATIC
     src/version.cpp
+    src/core/app.cpp
+    src/core/asset_cache.cpp
     src/core/assets.cpp
     src/core/window.cpp
+    src/scene/scene.cpp
+    src/scene/components.cpp
+    src/scene/component_registry.cpp
+    src/scene/serialize.cpp
     src/render/shader.cpp
     src/render/mesh.cpp
     src/render/texture.cpp
