@@ -1,2 +1,3 @@
 add_subdirectory(01_window)
 add_subdirectory(02_retro_cube)
+add_subdirectory(04_wfc_town)

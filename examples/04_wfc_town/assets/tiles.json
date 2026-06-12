@@ -1,0 +1,7 @@
+{
+  "_comment": "Example tile vocabulary overlay for 04_wfc_town: same schema as any liminal::procgen TileSet JSON. Tiles mentioned here override the compiled-in defaults (adjacency replaced wholesale, then symmetrized).",
+  "tiles": {
+    "dirt_path": { "weight": 3.5 },
+    "plaza":     { "weight": 1.4 }
+  }
+}
