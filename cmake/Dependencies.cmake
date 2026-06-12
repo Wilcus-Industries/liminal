@@ -128,15 +128,19 @@ if(LIMINAL_WITH_SCRIPTING)
     FetchContent_MakeAvailable(lua sol2)
 endif()
 
-# --- ImGuizmo (gizmos) — declared only; consumed in the editor phase ---------
+# --- ImGuizmo (gizmos) — sources only; compiled into liminal-editor ----------
 if(LIMINAL_BUILD_EDITOR)
-    # No upstream CMake build we use; we just populate the sources. The last
-    # release tag (1.83, 2021) predates ImGui 1.92 — the editor phase will
-    # likely need to pin a newer commit when wiring it up.
+    # The last release tag (1.83, 2021) predates ImGui 1.92, so we pin a
+    # master commit that builds against the 1.92 docking branch (HEAD as of
+    # 2026-06). No GIT_SHALLOW: shallow fetch of a raw SHA is unreliable
+    # across git versions. Upstream's own CMakeLists assumes a preinstalled
+    # imgui it can't find here — the bogus SOURCE_SUBDIR skips
+    # add_subdirectory entirely; liminal-editor compiles src/ImGuizmo.cpp
+    # itself against liminal_imgui.
     FetchContent_Declare(imguizmo
         GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo
-        GIT_TAG        1.83
-        GIT_SHALLOW    TRUE)
+        GIT_TAG        be8aa4aeab86b402701c8c1df011bd8cd776760b
+        SOURCE_SUBDIR  cmake-skip-upstream-build)
     FetchContent_MakeAvailable(imguizmo)
 endif()
 

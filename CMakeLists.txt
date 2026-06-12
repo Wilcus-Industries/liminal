@@ -153,3 +153,7 @@ endif()
 if(LIMINAL_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
+
+if(LIMINAL_BUILD_EDITOR)
+    add_subdirectory(editor)
+endif()

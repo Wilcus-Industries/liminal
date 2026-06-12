@@ -1,0 +1,4 @@
+{
+    "assetRoot": ".",
+    "startupScene": "scenes/main.lscene"
+}

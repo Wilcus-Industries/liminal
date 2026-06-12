@@ -1,0 +1,71 @@
+{
+    "liminal_scene": 1,
+    "entities": [
+        {
+            "id": 0,
+            "components": {
+                "Camera": {
+                    "farZ": 220.0,
+                    "fovDeg": 70.0,
+                    "nearZ": 0.1,
+                    "primary": true
+                },
+                "Name": { "value": "camera" },
+                "Transform": {
+                    "position": [0.0, 2.5, 7.0],
+                    "rotationEuler": [-14.0, 0.0, 0.0],
+                    "scale": [1.0, 1.0, 1.0]
+                }
+            }
+        },
+        {
+            "id": 1,
+            "components": {
+                "MeshRenderer": {
+                    "color": [0.55, 0.55, 0.6, 1.0],
+                    "meshAsset": "builtin:plane",
+                    "textureAsset": "builtin:grid"
+                },
+                "Name": { "value": "ground" },
+                "Transform": {
+                    "position": [0.0, 0.0, 0.0],
+                    "rotationEuler": [0.0, 0.0, 0.0],
+                    "scale": [14.0, 1.0, 14.0]
+                }
+            }
+        },
+        {
+            "id": 2,
+            "components": {
+                "MeshRenderer": {
+                    "color": [0.5, 0.45, 0.95, 1.0],
+                    "meshAsset": "builtin:box",
+                    "textureAsset": "builtin:checker"
+                },
+                "Name": { "value": "spinner" },
+                "Script": { "path": "scripts/spin.lua" },
+                "Transform": {
+                    "position": [0.0, 0.4, 0.0],
+                    "rotationEuler": [0.0, 0.0, 0.0],
+                    "scale": [1.0, 1.0, 1.0]
+                }
+            }
+        },
+        {
+            "id": 3,
+            "components": {
+                "MeshRenderer": {
+                    "color": [0.8, 0.75, 0.65, 1.0],
+                    "meshAsset": "builtin:pillar",
+                    "textureAsset": "builtin:concrete"
+                },
+                "Name": { "value": "pillar" },
+                "Transform": {
+                    "position": [2.6, 0.0, -1.5],
+                    "rotationEuler": [0.0, 0.0, 0.0],
+                    "scale": [1.0, 1.0, 1.0]
+                }
+            }
+        }
+    ]
+}
