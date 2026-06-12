@@ -5,8 +5,16 @@
 
 #include <liminal/version.hpp>
 
+#include <liminal/core/app.hpp>
+#include <liminal/core/asset_cache.hpp>
 #include <liminal/core/assets.hpp>
 #include <liminal/core/window.hpp>
+
+#include <liminal/scene/component_registry.hpp>
+#include <liminal/scene/components.hpp>
+#include <liminal/scene/entity.hpp>
+#include <liminal/scene/scene.hpp>
+#include <liminal/scene/serialize.hpp>
 
 #include <liminal/render/mesh.hpp>
 #include <liminal/render/renderer.hpp>
