@@ -126,8 +126,12 @@ if(LIMINAL_WITH_SCRIPTING)
 endif()
 
 if(LIMINAL_WITH_INFERENCE)
+    # llama stays PRIVATE: <liminal/inference/engine.hpp> exposes no llama
+    # types, so consumers need only liminal::liminal. The compile definition
+    # is PUBLIC because the header refuses to compile without it.
+    target_sources(liminal PRIVATE src/inference/engine.cpp)
     target_link_libraries(liminal PRIVATE llama)
-    target_compile_definitions(liminal PRIVATE LIMINAL_WITH_INFERENCE=1)
+    target_compile_definitions(liminal PUBLIC LIMINAL_WITH_INFERENCE=1)
 endif()
 
 if(LIMINAL_BUILD_EXAMPLES)

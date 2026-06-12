@@ -18,6 +18,10 @@
 
 #include <liminal/ui/imgui_layer.hpp>
 
+#ifdef LIMINAL_WITH_INFERENCE
+#include <liminal/inference/engine.hpp>
+#endif
+
 namespace liminal {
 
 // Returns the engine version string, e.g. "0.1.0".
