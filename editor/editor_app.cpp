@@ -56,6 +56,25 @@ EditorApp::EditorApp(std::string projectFile)
       m_renderer(),
       m_imgui(m_window) {
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
+#ifdef LIMINAL_EDITOR_FONT_TTF
+    // JetBrains Mono as the default font (first face added wins). Size by the
+    // window's content scale and shrink FontGlobalScale back so retina renders
+    // crisp. fs::exists is mandatory — AddFontFromFileTTF asserts on a missing
+    // file rather than returning null.
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        float sx = 1.0f, sy = 1.0f;
+        glfwGetWindowContentScale(m_window.handle(), &sx, &sy);
+        const float scale = sx > 0.0f ? sx : 1.0f;
+        if (fs::exists(LIMINAL_EDITOR_FONT_TTF) &&
+            io.Fonts->AddFontFromFileTTF(LIMINAL_EDITOR_FONT_TTF, 16.0f * scale))
+            io.FontGlobalScale = 1.0f / scale;
+        else
+            log("[editor] JetBrains Mono not found, using default font");
+    }
+#endif
+
     registerBuiltinComponents();
     m_gizmoOp = ImGuizmo::TRANSLATE;
     log("[editor] liminal editor started");
@@ -422,9 +441,10 @@ void EditorApp::drawViewport() {
         if (ImGui::IsKeyPressed(ImGuiKey_R)) m_gizmoOp = ImGuizmo::SCALE;
     }
 
-    drawGizmo(glm::vec2(imgMin.x, imgMin.y), glm::vec2(size.x, size.y));
+    const bool gizmoDrawn =
+        drawGizmo(glm::vec2(imgMin.x, imgMin.y), glm::vec2(size.x, size.y));
 
-    if (clicked && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing()) {
+    if (clicked && (!gizmoDrawn || (!ImGuizmo::IsOver() && !ImGuizmo::IsUsing()))) {
         const ImVec2 mouse = ImGui::GetMousePos();
         pickEntity(glm::vec2((mouse.x - imgMin.x) / size.x,
                              (mouse.y - imgMin.y) / size.y));
@@ -465,11 +485,11 @@ void EditorApp::handleCameraInput(bool viewportHovered) {
         m_camPos += glm::normalize(move) * m_camSpeed * m_dt;
 }
 
-void EditorApp::drawGizmo(const glm::vec2& imgMin, const glm::vec2& imgSize) {
+bool EditorApp::drawGizmo(const glm::vec2& imgMin, const glm::vec2& imgSize) {
     entt::registry& reg = m_scene.registry();
-    if (m_selected == entt::null || !reg.valid(m_selected)) return;
+    if (m_selected == entt::null || !reg.valid(m_selected)) return false;
     auto* t = reg.try_get<Transform>(m_selected);
-    if (!t) return;
+    if (!t) return false;
 
     ImGuizmo::SetOrthographic(false);
     ImGuizmo::SetDrawlist();
@@ -499,6 +519,7 @@ void EditorApp::drawGizmo(const glm::vec2& imgMin, const glm::vec2& imgSize) {
         ImGuizmo::DecomposeMatrixToComponents(model, &t->position.x,
                                               &t->rotationEuler.x, &t->scale.x);
     }
+    return true;
 }
 
 void EditorApp::pickEntity(const glm::vec2& uv) {
@@ -510,9 +531,52 @@ void EditorApp::pickEntity(const glm::vec2& uv) {
     const glm::vec3 origin(p0);
     const glm::vec3 dir = glm::normalize(glm::vec3(p1) - origin);
 
+    entt::registry& reg = m_scene.registry();
     entt::entity best = entt::null;
     float bestAlong = 1e9f;
     m_scene.each<Transform>([&](Entity e, Transform& t) {
+        // Ray-vs-AABB slab test in entity local space when a mesh is known.
+        const Mesh* mesh = nullptr;
+        if (const auto* mr = reg.try_get<MeshRenderer>(e.handle()))
+            mesh = m_assets.mesh(mr->meshAsset);
+        if (mesh) {
+            const glm::mat4 invModel = glm::inverse(t.matrix());
+            const glm::vec3 lo(invModel * glm::vec4(origin, 1.0f));
+            const glm::vec3 ld(invModel * glm::vec4(dir, 0.0f));
+            float tMin = 0.0f, tMax = 1e9f;
+            bool hit = true;
+            for (int i = 0; i < 3; ++i) {
+                if (std::abs(ld[i]) < 1e-8f) {
+                    if (lo[i] < mesh->localMin[i] || lo[i] > mesh->localMax[i]) {
+                        hit = false;
+                        break;
+                    }
+                    continue;
+                }
+                float t0 = (mesh->localMin[i] - lo[i]) / ld[i];
+                float t1 = (mesh->localMax[i] - lo[i]) / ld[i];
+                if (t0 > t1) std::swap(t0, t1);
+                tMin = std::max(tMin, t0);
+                tMax = std::min(tMax, t1);
+                if (tMin > tMax) {
+                    hit = false;
+                    break;
+                }
+            }
+            if (hit) {
+                // tMin is in local units along an unnormalized direction; map
+                // back to world distance for cross-entity comparison.
+                const glm::vec3 worldHit(
+                    t.matrix() * glm::vec4(lo + ld * tMin, 1.0f));
+                const float along = glm::dot(worldHit - origin, dir);
+                if (along >= 0.0f && along < bestAlong) {
+                    bestAlong = along;
+                    best = e.handle();
+                }
+            }
+            return;
+        }
+        // Fallback: sphere proxy for entities without a resolvable mesh.
         const glm::vec3 d = t.position - origin;
         const float along = glm::dot(d, dir);
         if (along < 0.0f) return;
@@ -590,7 +654,13 @@ void EditorApp::drawConsole() {
     ImGui::Separator();
     ImGui::BeginChild("##consolelines", ImVec2(0, 0), ImGuiChildFlags_None,
                       ImGuiWindowFlags_HorizontalScrollbar);
-    for (const auto& line : m_console) ImGui::TextUnformatted(line.c_str());
+    ImGuiListClipper clipper;
+    clipper.Begin(int(m_console.size()));
+    while (clipper.Step()) {
+        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+            ImGui::TextUnformatted(m_console[size_t(i)].c_str());
+    }
+    clipper.End();
     if (m_consoleScrollDown) {
         ImGui::SetScrollHereY(1.0f);
         m_consoleScrollDown = false;
@@ -708,7 +778,8 @@ void EditorApp::stopPlay() {
 void EditorApp::log(const std::string& line) {
     m_console.push_back(line);
     if (m_console.size() > 2000)
-        m_console.erase(m_console.begin(), m_console.begin() + 1000);
+        m_console.erase(m_console.begin(),
+                        m_console.begin() + ptrdiff_t(m_console.size() - 1000));
     m_consoleScrollDown = true;
 }
 

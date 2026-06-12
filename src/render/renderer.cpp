@@ -72,6 +72,7 @@ Renderer::Renderer(const ShaderPack& pack)
                                        pack.label + " [scene]")},
       m_blitShader{Shader::fromSource(pack.blitVert, pack.blitFrag,
                                       pack.label + " [blit]")} {
+    try {
     createTargets();
 
     // Fullscreen triangle for the blit pass. One triangle, not a quad: the
@@ -103,6 +104,20 @@ Renderer::Renderer(const ShaderPack& pack)
 
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    } catch (...) {
+        // Partially-constructed object: ~Renderer won't run, so free any GL
+        // objects created so far before rethrowing.
+        if (m_fsVao) {
+            glDeleteVertexArrays(1, &m_fsVao);
+            m_fsVao = 0;
+        }
+        if (m_fsVbo) {
+            glDeleteBuffers(1, &m_fsVbo);
+            m_fsVbo = 0;
+        }
+        destroyTargets();
+        throw;
+    }
 }
 
 void Renderer::setShaderPack(const ShaderPack& pack) {

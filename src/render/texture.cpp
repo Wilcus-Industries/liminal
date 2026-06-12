@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <glad/gl.h>
@@ -271,14 +272,12 @@ Texture Texture::uploadWH(const unsigned char* pixels, int w, int h,
 std::optional<Texture> Texture::fromFile(const std::string& path) {
     int w = 0, h = 0, channels = 0;
     // Force 4 channels so the upload path stays RGBA8 regardless of source.
-    unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 4);
+    std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> data(
+        stbi_load(path.c_str(), &w, &h, &channels, 4), &stbi_image_free);
     if (!data || w <= 0 || h <= 0) {
-        if (data) stbi_image_free(data);
         return std::nullopt;
     }
-    Texture tex = uploadWH(data, w, h, GL_CLAMP_TO_EDGE);
-    stbi_image_free(data);
-    return tex;
+    return uploadWH(data.get(), w, h, GL_CLAMP_TO_EDGE);
 }
 
 Texture Texture::sprite(Sprite kind, int size,

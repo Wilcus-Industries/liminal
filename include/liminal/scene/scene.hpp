@@ -12,6 +12,7 @@
 //   scene.save("level.lscene");
 //   liminal::Scene back = liminal::Scene::load("level.lscene");
 
+#include <cassert>
 #include <string>
 #include <utility>
 
@@ -68,22 +69,26 @@ private:
 
 template <typename T, typename... Args>
 T& Entity::add(Args&&... args) {
+    assert(m_scene && "Entity::add on entity with no scene");
     return m_scene->registry().emplace_or_replace<T>(m_handle,
                                                      std::forward<Args>(args)...);
 }
 
 template <typename T>
 T& Entity::add(T component) {
+    assert(m_scene && "Entity::add on entity with no scene");
     return m_scene->registry().emplace_or_replace<T>(m_handle, std::move(component));
 }
 
 template <typename T>
 T& Entity::get() {
+    assert(m_scene && "Entity::get on entity with no scene");
     return m_scene->registry().get<T>(m_handle);
 }
 
 template <typename T>
 const T& Entity::get() const {
+    assert(m_scene && "Entity::get on entity with no scene");
     return m_scene->registry().get<T>(m_handle);
 }
 
@@ -94,7 +99,7 @@ bool Entity::has() const {
 
 template <typename T>
 void Entity::remove() {
-    m_scene->registry().remove<T>(m_handle);
+    if (m_scene) m_scene->registry().remove<T>(m_handle);
 }
 
 inline void Entity::destroy() {

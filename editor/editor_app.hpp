@@ -57,7 +57,9 @@ private:
     // --- viewport helpers ---
     void handleCameraInput(bool viewportHovered);
     void pickEntity(const glm::vec2& uv); // uv in [0,1] over the image
-    void drawGizmo(const glm::vec2& imgMin, const glm::vec2& imgSize);
+    // Returns true only when ImGuizmo::Manipulate ran this frame (IsOver/
+    // IsUsing are stale otherwise).
+    bool drawGizmo(const glm::vec2& imgMin, const glm::vec2& imgSize);
 
     // --- commands ---
     void openProject(const std::string& projectFile);

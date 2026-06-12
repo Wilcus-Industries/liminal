@@ -101,9 +101,11 @@ if(LIMINAL_WITH_INFERENCE)
     # into its targets, and under C++20 MSVC types u8"" literals as char8_t,
     # which llama-chat.cpp does not compile against. Scope the standard down
     # for llama only (plain variable — read at target creation time).
+    set(_liminal_saved_cxx_standard ${CMAKE_CXX_STANDARD})
     set(CMAKE_CXX_STANDARD 17)
     FetchContent_MakeAvailable(llama)
-    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD ${_liminal_saved_cxx_standard})
+    unset(_liminal_saved_cxx_standard)
 endif()
 
 # --- Lua 5.4 + sol2 (scripting) — gated by LIMINAL_WITH_SCRIPTING ------------
@@ -142,6 +144,15 @@ if(LIMINAL_BUILD_EDITOR)
         GIT_TAG        be8aa4aeab86b402701c8c1df011bd8cd776760b
         SOURCE_SUBDIR  cmake-skip-upstream-build)
     FetchContent_MakeAvailable(imguizmo)
+
+    # JetBrains Mono for the editor UI font. Plain zip of TTFs (no CMake), so
+    # we Populate-and-point like stb/glad — the editor bakes the absolute path
+    # to the Regular face and loads it at startup.
+    FetchContent_Declare(jetbrains_mono
+        URL https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip)
+    FetchContent_MakeAvailable(jetbrains_mono)
+    set(LIMINAL_JETBRAINS_MONO_TTF
+        "${jetbrains_mono_SOURCE_DIR}/fonts/ttf/JetBrainsMono-Regular.ttf")
 endif()
 
 # glad: generate a static loader for exactly the GL version we target.

@@ -147,9 +147,10 @@ void bindEntity(sol::state& lua) {
         "valid", [](Entity& e) { return e.valid(); },
         "destroy", [](Entity& e) { e.destroy(); },
         "get_transform",
-        [](Entity& e) -> Transform& {
+        [](Entity& e, sol::this_state s) -> sol::object {
+            if (!e.valid()) return sol::make_object(s, sol::lua_nil);
             if (!e.has<Transform>()) e.add<Transform>(Transform{});
-            return e.get<Transform>();
+            return sol::make_object(s, &e.get<Transform>());
         },
         "get_mesh_renderer",
         [](Entity& e, sol::this_state s) -> sol::object {
@@ -159,7 +160,7 @@ void bindEntity(sol::state& lua) {
         },
         "get_component",
         [](Entity& e, const std::string& name, sol::this_state s) -> sol::object {
-            if (!e.valid()) return sol::make_object(s, sol::lua_nil);
+            if (!e.valid() || !e.scene()) return sol::make_object(s, sol::lua_nil);
             const ComponentOps* ops = ComponentRegistry::instance().find(name);
             if (!ops || !ops->getRaw) return sol::make_object(s, sol::lua_nil);
             return pushComponent(s, name,
