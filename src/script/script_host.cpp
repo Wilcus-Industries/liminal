@@ -57,6 +57,7 @@ void ScriptHost::reportError(const std::string& path,
     const std::string key = path + ": " + message;
     if (!m_reportedErrors.insert(key).second) return; // already reported
     std::fprintf(stderr, "[lua] %s\n", key.c_str());
+    if (m_errorSink) m_errorSink(key);
 }
 
 ScriptHost::ScriptFile& ScriptHost::ensureFile(const std::string& path) {

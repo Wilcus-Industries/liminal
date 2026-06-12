@@ -37,6 +37,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -71,6 +72,13 @@ public:
     // Seconds since host construction — what lm.time.now() returns.
     double now() const;
 
+    // Optional sink for script errors, called with "path: message" alongside
+    // the stderr print (same once-per-distinct-message dedup). The editor
+    // uses this to route [lua] errors into its console. Null disables.
+    void setErrorSink(std::function<void(const std::string&)> sink) {
+        m_errorSink = std::move(sink);
+    }
+
 private:
     struct ScriptFile {
         std::string resolved;                    // Assets::resolve result
@@ -97,6 +105,7 @@ private:
     std::unordered_map<std::string, ScriptFile> m_files;      // by Script.path
     std::unordered_map<entt::entity, Instance> m_instances;
     std::unordered_set<std::string> m_reportedErrors;
+    std::function<void(const std::string&)> m_errorSink;
     float m_reloadTimer = 0.0f;
     std::chrono::steady_clock::time_point m_epoch;
 };

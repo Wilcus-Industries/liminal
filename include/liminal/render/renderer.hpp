@@ -67,6 +67,12 @@ public:
     // preserving the virtual aspect ratio (letterboxed if needed).
     void endFrame(int windowFbWidth, int windowFbHeight);
 
+    // Editor/tooling access: the GL texture name of the low-res color
+    // attachment the scene pass renders into. Valid after construction;
+    // contents are the last frame drawn between beginFrame()/endFrame().
+    // Reallocated (same purpose, possibly new name) when virtualW/H change.
+    unsigned int colorTexture() const { return m_colorTex; }
+
 private:
     void createTargets();  // (re)allocate FBO at settings.virtualW/H
     void destroyTargets();
