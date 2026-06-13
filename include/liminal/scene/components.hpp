@@ -5,6 +5,7 @@
 // ComponentRegistry, so the structs themselves stay dependency-free.
 
 #include <string>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -74,10 +75,11 @@ struct Light {
     float intensity = 1.0f;
 };
 
-// Behavior arrives with Lua in Phase 5; for now this is just the script path,
-// so scenes authored with scripts round-trip losslessly.
+// Behavior via Lua: an entity may run any number of scripts, each its own
+// path. Stored as a list so a single entity can compose multiple behaviors;
+// legacy single-`path` JSON still loads (see registerScript).
 struct Script {
-    std::string path;
+    std::vector<std::string> paths;
 };
 
 } // namespace liminal

@@ -11,6 +11,7 @@
 // and mood-flavored settings; that's the whole contract.
 
 #include <string>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -72,6 +73,10 @@ public:
     // contents are the last frame drawn between beginFrame()/endFrame().
     // Reallocated (same purpose, possibly new name) when virtualW/H change.
     unsigned int colorTexture() const { return m_colorTex; }
+
+    // Reads the current low-res color FBO into rgba (size = w*h*4, RGBA8,
+    // bottom-up). If there is no allocated FBO, sets w=h=0 and clears rgba.
+    void readPixels(std::vector<unsigned char>& rgba, int& w, int& h) const;
 
 private:
     void createTargets();  // (re)allocate FBO at settings.virtualW/H

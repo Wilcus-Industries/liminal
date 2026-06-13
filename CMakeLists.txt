@@ -87,6 +87,7 @@ add_library(liminal STATIC
     src/core/assets.cpp
     src/core/pak.cpp
     src/core/platform.cpp
+    src/core/pty.cpp
     src/core/window.cpp
     src/scene/scene.cpp
     src/scene/components.cpp

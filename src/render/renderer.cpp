@@ -295,6 +295,21 @@ void Renderer::draw(const DrawItem& item) {
     item.mesh->draw();
 }
 
+void Renderer::readPixels(std::vector<unsigned char>& rgba, int& w, int& h) const {
+    if (m_fbo == 0 || m_allocW == 0 || m_allocH == 0) {
+        w = 0;
+        h = 0;
+        rgba.clear();
+        return;
+    }
+    w = m_allocW;
+    h = m_allocH;
+    rgba.resize(static_cast<std::size_t>(w) * h * 4);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 void Renderer::endFrame(int windowFbWidth, int windowFbHeight) {
     // Back to the default framebuffer (the window). From here on we are
     // drawing a single textured triangle; depth testing would only let

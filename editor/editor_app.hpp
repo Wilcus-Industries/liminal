@@ -28,6 +28,8 @@
 #include <liminal/script/script_host.hpp>
 
 #include "script_editor.hpp"
+#include "terminal_panel.hpp"
+#include "mcp_server.hpp"
 
 namespace liminal { class Audio; }
 #if defined(LIMINAL_WITH_INFERENCE)
@@ -59,6 +61,7 @@ private:
     void drawAssetBrowser();
     void drawConsole();
     void drawScriptEditor();
+    void drawTerminal();
     void buildDefaultLayout(unsigned int dockspaceId);
 
     // --- viewport helpers ---
@@ -84,6 +87,19 @@ private:
     void log(const std::string& line);
     void refreshAssetTree();
 
+    // MCP: build the read-only provider over editor state and (re)write the
+    // project's .mcp.json so `claude` discovers the editor's HTTP endpoint.
+    void startMcpServer();
+    void writeMcpJson(int port);
+
+    // Seed the canonical liminal-lua Claude Code skill into the opened
+    // project's .claude/skills/ if absent (never overwrites a customized one).
+    void seedLuaSkill();
+
+    // Resolves "123" (entt id) or a Name to an entity; entt::null if not found.
+    // Used by the MCP get/set/remove/destroy entity tools (main thread only).
+    entt::entity resolveEntity(const std::string& idOrName);
+
     // --- core (construction order matters: Window owns the GL context) ---
     Window m_window;
     Renderer m_renderer;
@@ -102,6 +118,14 @@ private:
 
     // --- script editor pane (own TextEditor tabs; logs via our console) ---
     std::unique_ptr<ScriptEditorPanel> m_scriptEditor;
+
+    // --- terminal pane (hosts `claude` / a shell over a pty + libvterm) ---
+    std::unique_ptr<TerminalPanel> m_terminal;
+
+    // --- MCP server (read-only scene introspection for Claude Code) ---
+    // Started on first project open; pump()ed each frame on the main thread so
+    // its tools read m_scene / project fields safely (see mcp_server.hpp).
+    std::unique_ptr<McpServer> m_mcp;
 
     // --- project ---
     std::string m_projectFile; // absolute path of project.ljson, "" = none

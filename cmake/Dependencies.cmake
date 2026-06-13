@@ -160,6 +160,33 @@ if(LIMINAL_BUILD_EDITOR)
         SOURCE_SUBDIR  cmake-skip-upstream-build)
     FetchContent_MakeAvailable(imguicolortextedit)
 
+    # libvterm — the VT100/xterm engine behind the editor's terminal panel.
+    # Neovim's mirror builds with a plain Makefile (no usable CMake), and its
+    # core is pure C in src/*.c against include/vterm.h. Same treatment as
+    # ImGuizmo/TextEditor: Populate the source, compile the .c files straight
+    # into liminal-editor (see editor/CMakeLists.txt), and point at include/.
+    # No GIT_SHALLOW with a raw SHA (see the ImGuizmo note); the bogus
+    # SOURCE_SUBDIR skips any upstream add_subdirectory.
+    FetchContent_Declare(libvterm
+        GIT_REPOSITORY https://github.com/neovim/libvterm
+        GIT_TAG        934bc2fbf21800ac3458a499df8820ca5fb45fd3
+        SOURCE_SUBDIR  cmake-skip-upstream-build)
+    FetchContent_MakeAvailable(libvterm)
+
+    # cpp-httplib — header-only HTTP server behind the editor's MCP server (the
+    # in-editor Model Context Protocol endpoint Claude Code introspects the live
+    # scene through). Plaintext localhost only: we never enable
+    # CPPHTTPLIB_OPENSSL_SUPPORT. Its CMake defines an INTERFACE target
+    # `httplib::httplib` carrying the include dir + Threads dependency.
+    set(HTTPLIB_REQUIRE_OPENSSL OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_REQUIRE_ZLIB    OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_REQUIRE_BROTLI  OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(httplib
+        GIT_REPOSITORY https://github.com/yhirose/cpp-httplib
+        GIT_TAG        v0.18.3
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(httplib)
+
     # JetBrains Mono for the editor UI font. Plain zip of TTFs (no CMake), so
     # we Populate-and-point like stb/glad — the editor bakes the absolute path
     # to the Regular face and loads it at startup.

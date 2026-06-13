@@ -12,8 +12,10 @@
 //   return M
 //
 // `self` is the lm Entity userdata for the owning entity. Both functions are
-// optional. Paths in Script{path} are resolved through Assets::resolve, so
-// apps register their script dirs as asset search paths.
+// optional. An entity's Script.paths may list multiple scripts; each runs as
+// an independent instance (own environment, own on_start/on_update). Paths are
+// resolved through Assets::resolve, so apps register their script dirs as
+// asset search paths.
 //
 // update(scene, dt) drives the lifecycle: lazily inits newly-seen Script
 // components (on_start once), ticks on_update, and drops state for entities
@@ -37,6 +39,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <entt/entt.hpp>
 #include <sol/sol.hpp>
@@ -103,6 +106,15 @@ public:
         m_errorSink = std::move(sink);
     }
 
+    // Optional sink for lm.log output, called with the raw message alongside
+    // the stdout print. The editor uses this to route [lua] log lines into its
+    // console (otherwise they only reach the terminal). Null disables.
+    void setLogSink(std::function<void(const std::string&)> sink) {
+        m_logSink = std::move(sink);
+    }
+    // Emit an lm.log line: always prints to stdout, plus the log sink if set.
+    void emitLog(const std::string& msg);
+
 private:
     struct ScriptFile {
         std::string resolved;                    // Assets::resolve result
@@ -128,10 +140,13 @@ private:
     sol::state m_lua;
     ScriptContext m_ctx;
     Scene* m_scene = nullptr;
-    std::unordered_map<std::string, ScriptFile> m_files;      // by Script.path
-    std::unordered_map<entt::entity, Instance> m_instances;
+    std::unordered_map<std::string, ScriptFile> m_files;      // by script path
+    // One entity can run many scripts: each entity maps to a vector of
+    // Instances, one per path in its Script.paths.
+    std::unordered_map<entt::entity, std::vector<Instance>> m_instances;
     std::unordered_set<std::string> m_reportedErrors;
     std::function<void(const std::string&)> m_errorSink;
+    std::function<void(const std::string&)> m_logSink;
     float m_reloadTimer = 0.0f;
     std::chrono::steady_clock::time_point m_epoch;
 };

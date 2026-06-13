@@ -106,6 +106,10 @@ EditorApp::EditorApp(std::string projectFile)
     m_scriptEditor = std::make_unique<ScriptEditorPanel>(
         [this](const std::string& line) { log(line); });
 
+    // Terminal pane: hosts an interactive `claude` (or a shell fallback). The
+    // child process / reader thread spin up lazily on its first draw.
+    m_terminal = std::make_unique<TerminalPanel>();
+
     registerBuiltinComponents();
     m_gizmoOp = ImGuizmo::TRANSLATE;
     log("[editor] liminal editor started");
@@ -126,6 +130,10 @@ void EditorApp::run() {
 
         m_imgui.beginFrame();
         ImGuizmo::BeginFrame();
+
+        // Drain MCP tool tasks on the main thread so they read scene state
+        // safely (the http threads parked them here — see mcp_server.hpp).
+        if (m_mcp) m_mcp->pump();
 
         if (m_mode == Mode::Play && !m_paused && m_scripts)
             m_scripts->update(m_scene, m_dt);
@@ -216,10 +224,15 @@ void EditorApp::drawUi() {
     drawAssetBrowser();
     drawConsole();
     drawScriptEditor();
+    drawTerminal();
 }
 
 void EditorApp::drawScriptEditor() {
     if (m_scriptEditor) m_scriptEditor->draw(m_dt);
+}
+
+void EditorApp::drawTerminal() {
+    if (m_terminal) m_terminal->draw();
 }
 
 void EditorApp::buildDefaultLayout(unsigned int dockspaceId) {
@@ -242,6 +255,8 @@ void EditorApp::buildDefaultLayout(unsigned int dockspaceId) {
     ImGui::DockBuilderDockWindow("Viewport", center);
     // Script Editor shares the center node, tabbed behind the Viewport.
     ImGui::DockBuilderDockWindow("Script Editor", center);
+    // Terminal shares the center node too, tabbed behind the Viewport.
+    ImGui::DockBuilderDockWindow("Terminal", center);
     ImGui::DockBuilderFinish(dockId);
 }
 
@@ -803,6 +818,19 @@ void EditorApp::openProject(const std::string& projectFile) {
         m_assetRoot + ")");
 
     if (!m_startupScene.empty()) openScene(m_startupScene);
+
+    // Point the editor terminal at the project dir so `claude` (or the fallback
+    // shell) starts with the opened project as its CWD. No-op once spawned.
+    if (m_terminal)
+        m_terminal->setWorkingDir(p.parent_path().string());
+
+    // Seed the liminal-lua Claude Code skill into this project if absent, so
+    // Claude Code in the editor terminal knows the `lm` API. Non-fatal.
+    seedLuaSkill();
+
+    // Bring up the MCP endpoint and (re)write .mcp.json now that the project
+    // path / dir are known. Non-fatal if it fails (logged inside).
+    startMcpServer();
 }
 
 void EditorApp::newScene() {
@@ -1012,6 +1040,8 @@ void EditorApp::startPlay() {
     m_scripts = std::make_unique<ScriptHost>(std::move(ctx));
     m_scripts->setErrorSink(
         [this](const std::string& msg) { log("[lua] " + msg); });
+    m_scripts->setLogSink(
+        [this](const std::string& msg) { log("[lua] " + msg); });
     log("[editor] play");
 }
 
@@ -1039,6 +1069,271 @@ void EditorApp::log(const std::string& line) {
         m_console.erase(m_console.begin(),
                         m_console.begin() + ptrdiff_t(m_console.size() - 1000));
     m_consoleScrollDown = true;
+}
+
+// --- MCP server --------------------------------------------------------------
+
+entt::entity EditorApp::resolveEntity(const std::string& idOrName) {
+    auto& reg = m_scene.registry();
+    // Resolve key as an entt id first, then fall back to a Name match.
+    try {
+        const auto raw = static_cast<entt::id_type>(std::stoul(idOrName));
+        const auto cand = entt::entity{raw};
+        if (reg.valid(cand)) return cand;
+    } catch (...) {
+        // not numeric — fall through to name lookup
+    }
+    for (auto e : reg.view<entt::entity>()) {
+        const auto* n = reg.try_get<Name>(e);
+        if (n && n->value == idOrName) return e;
+    }
+    return entt::null;
+}
+
+void EditorApp::startMcpServer() {
+    if (m_projectFile.empty()) return;
+    if (m_mcp) {
+        // Project re-opened: refresh .mcp.json against the existing endpoint.
+        writeMcpJson(m_mcp->port());
+        return;
+    }
+
+    // The provider getters all run inside McpServer::pump() on the main thread
+    // (see mcp_server.hpp), so capturing `this` and touching m_scene / project
+    // fields from them is safe — no off-thread entt access.
+    McpProvider provider;
+
+    provider.sceneTree = [this]() -> nlohmann::json {
+        registerBuiltinComponents();
+        const auto& reg = m_scene.registry();
+        const auto& ops = ComponentRegistry::instance().all();
+        nlohmann::json entities = nlohmann::json::array();
+        std::vector<entt::entity> sorted;
+        for (auto e : reg.view<entt::entity>()) sorted.push_back(e);
+        std::sort(sorted.begin(), sorted.end(), [](entt::entity a, entt::entity b) {
+            return entt::to_integral(a) < entt::to_integral(b);
+        });
+        for (auto e : sorted) {
+            nlohmann::json comps = nlohmann::json::array();
+            for (const auto& op : ops)
+                if (op.has(reg, e)) comps.push_back(op.name);
+            std::string name;
+            if (const auto* n = reg.try_get<Name>(e)) name = n->value;
+            entities.push_back({{"id", entt::to_integral(e)},
+                                {"name", name},
+                                {"components", comps}});
+        }
+        return {{"entities", entities}};
+    };
+
+    provider.getEntity = [this](const std::string& key) -> nlohmann::json {
+        registerBuiltinComponents();
+        auto& reg = m_scene.registry();
+        const auto& ops = ComponentRegistry::instance().all();
+
+        const entt::entity target = resolveEntity(key);
+        if (target == entt::null) return nullptr;
+
+        nlohmann::json comps = nlohmann::json::object();
+        for (const auto& op : ops)
+            if (op.has(reg, target)) comps[op.name] = op.toJson(reg, target);
+        return {{"id", entt::to_integral(target)}, {"components", comps}};
+    };
+
+    provider.setComponent = [this](const std::string& idOrName,
+                                   const std::string& comp,
+                                   const nlohmann::json& data) -> nlohmann::json {
+        registerBuiltinComponents();
+        const entt::entity e = resolveEntity(idOrName);
+        if (e == entt::null) return {{"error", "entity not found"}};
+        const ComponentOps* ops = ComponentRegistry::instance().find(comp);
+        if (!ops) return {{"error", "unknown component: " + comp}};
+        ops->fromJson(m_scene.registry(), e, data);
+        return {{"ok", true},
+                {"id", (int)entt::to_integral(e)},
+                {"component", comp}};
+    };
+
+    provider.removeComponent = [this](const std::string& idOrName,
+                                      const std::string& comp) -> nlohmann::json {
+        registerBuiltinComponents();
+        const entt::entity e = resolveEntity(idOrName);
+        if (e == entt::null) return {{"error", "entity not found"}};
+        const ComponentOps* ops = ComponentRegistry::instance().find(comp);
+        if (!ops) return {{"error", "unknown component: " + comp}};
+        ops->removeFrom(m_scene.registry(), e);
+        return {{"ok", true},
+                {"id", (int)entt::to_integral(e)},
+                {"component", comp}};
+    };
+
+    provider.createEntity = [this](const std::string& name) -> nlohmann::json {
+        registerBuiltinComponents();
+        Entity ent = m_scene.create(name);
+        return {{"ok", true},
+                {"id", (int)entt::to_integral(ent.handle())},
+                {"name", name}};
+    };
+
+    provider.destroyEntity = [this](const std::string& idOrName) -> nlohmann::json {
+        registerBuiltinComponents();
+        const entt::entity e = resolveEntity(idOrName);
+        if (e == entt::null) return {{"error", "entity not found"}};
+        if (e == m_selected) m_selected = entt::null;
+        const int id = (int)entt::to_integral(e);
+        m_scene.destroy(Entity(e, &m_scene));
+        return {{"ok", true}, {"id", id}};
+    };
+
+    provider.currentProject = [this]() -> nlohmann::json {
+        return {{"projectFile", m_projectFile},
+                {"title", m_projectTitle},
+                {"scenePath", m_scenePath}};
+    };
+
+    provider.projectDir = [this]() -> std::string {
+        if (m_projectFile.empty()) return {};
+        return fs::path(m_projectFile).parent_path().string();
+    };
+
+    provider.consoleLog = [this](int lines) -> nlohmann::json {
+        if (lines <= 0) lines = 200;
+        const std::size_t n =
+            std::min(static_cast<std::size_t>(lines), m_console.size());
+        nlohmann::json arr = nlohmann::json::array();
+        for (std::size_t i = m_console.size() - n; i < m_console.size(); ++i)
+            arr.push_back(m_console[i]);
+        return {{"lines", arr}};
+    };
+
+    provider.playState = [this]() -> nlohmann::json {
+        return {{"mode", m_mode == Mode::Play ? "play" : "edit"},
+                {"paused", m_paused}};
+    };
+
+    provider.screenshot = [this]() -> nlohmann::json {
+        std::vector<unsigned char> rgba;
+        int w = 0, h = 0;
+        m_renderer.readPixels(rgba, w, h);
+        if (w == 0 || h == 0) return {{"error", "no framebuffer"}};
+        return {{"base64", mcpEncodePngBase64(rgba, w, h)},
+                {"mimeType", "image/png"}};
+    };
+
+    provider.control = [this](const std::string& action) -> nlohmann::json {
+        if (action == "play") {
+            if (m_mode != Mode::Play) startPlay();
+        } else if (action == "stop") {
+            if (m_mode == Mode::Play) stopPlay();
+        } else if (action == "pause") {
+            if (m_mode == Mode::Play) m_paused = true;
+            else return {{"error", "not playing"}};
+        } else if (action == "resume") {
+            if (m_mode == Mode::Play) m_paused = false;
+            else return {{"error", "not playing"}};
+        } else {
+            return {{"error", "unknown action: " + action}};
+        }
+        return {{"mode", m_mode == Mode::Play ? "play" : "edit"},
+                {"paused", m_paused}};
+    };
+
+    provider.reloadScene = [this]() -> nlohmann::json {
+        if (m_scenePath.empty()) return {{"error", "no scene open"}};
+        openScene(m_scenePath); // auto-stops Play + reloads from disk
+        return {{"ok", true}, {"scenePath", m_scenePath}};
+    };
+
+    provider.saveScene = [this](const std::string& path) -> nlohmann::json {
+        const std::string target = path.empty() ? m_scenePath : path;
+        if (target.empty()) return {{"error", "no scene path"}};
+        if (!this->saveScene(target))
+            return {{"error", "save failed: " + target}};
+        return {{"ok", true}, {"path", target}};
+    };
+
+    m_mcp = std::make_unique<McpServer>(std::move(provider));
+    m_mcp->setLogSink([this](const std::string& line) { log(line); });
+    const int port = m_mcp->start(7717);
+    if (port == 0) {
+        log("[mcp] server failed to start; Claude Code scene tools unavailable");
+        m_mcp.reset();
+        return;
+    }
+    log("[mcp] server listening at http://127.0.0.1:" + std::to_string(port) +
+        "/mcp");
+    writeMcpJson(port);
+}
+
+void EditorApp::writeMcpJson(int port) {
+    if (m_projectFile.empty() || port == 0) return;
+    const fs::path mcpPath = fs::path(m_projectFile).parent_path() / ".mcp.json";
+
+    // Merge into an existing .mcp.json so unrelated servers survive: parse what's
+    // there, set/replace just the "liminal" entry, write back. Bad/missing file
+    // starts from an empty object.
+    nlohmann::json doc = nlohmann::json::object();
+    if (std::ifstream in(mcpPath); in) {
+        try {
+            in >> doc;
+        } catch (const std::exception&) {
+            doc = nlohmann::json::object(); // clobber only an unparseable file
+        }
+        if (!doc.is_object()) doc = nlohmann::json::object();
+    }
+    if (!doc.contains("mcpServers") || !doc["mcpServers"].is_object())
+        doc["mcpServers"] = nlohmann::json::object();
+    doc["mcpServers"]["liminal"] = {
+        {"type", "http"},
+        {"url", "http://127.0.0.1:" + std::to_string(port) + "/mcp"}};
+
+    std::ofstream out(mcpPath);
+    if (!out) {
+        log("[mcp] could not write " + mcpPath.string() + " (non-fatal)");
+        return;
+    }
+    out << doc.dump(2) << '\n';
+    log("[mcp] wrote " + mcpPath.string() + " (liminal -> port " +
+        std::to_string(port) + ")");
+}
+
+void EditorApp::seedLuaSkill() {
+    if (m_projectFile.empty()) return;
+#if !defined(LIMINAL_EDITOR_LUA_SKILL)
+    return;
+#else
+    const std::string srcPath = LIMINAL_EDITOR_LUA_SKILL;
+    if (srcPath.empty()) return;
+
+    const fs::path dest = fs::path(m_projectFile).parent_path() /
+                          ".claude" / "skills" / "liminal-lua" / "SKILL.md";
+    std::error_code ec;
+    if (fs::exists(dest, ec)) return; // never clobber a customized skill
+
+    // Don't seed a project into its own canonical source (the sample project).
+    if (fs::weakly_canonical(dest, ec) ==
+        fs::weakly_canonical(fs::path(srcPath), ec))
+        return;
+
+    std::ifstream src(srcPath, std::ios::binary);
+    if (!src) {
+        log("[skill] liminal-lua source missing: " + srcPath + " (non-fatal)");
+        return;
+    }
+    fs::create_directories(dest.parent_path(), ec);
+    if (ec) {
+        log("[skill] could not create " + dest.parent_path().string() +
+            " (non-fatal)");
+        return;
+    }
+    std::ofstream out(dest, std::ios::binary);
+    if (!out) {
+        log("[skill] could not write " + dest.string() + " (non-fatal)");
+        return;
+    }
+    out << src.rdbuf();
+    log("[skill] seeded liminal-lua skill -> " + dest.string());
+#endif
 }
 
 void EditorApp::refreshAssetTree() {

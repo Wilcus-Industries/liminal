@@ -1,5 +1,5 @@
 // ScriptHost implementation. Design notes live in the header; the load path
-// in brief: Script.path -> Assets::resolve -> file source cached per path ->
+// in brief: each path in Script.paths -> Assets::resolve -> file source cached per path ->
 // per-entity sol::environment runs the chunk -> chunk returns the behavior
 // table -> on_start once, on_update per frame, everything pcall'd.
 #include <liminal/script/script_host.hpp>
@@ -59,6 +59,12 @@ void ScriptHost::reportError(const std::string& path,
     if (!m_reportedErrors.insert(key).second) return; // already reported
     std::fprintf(stderr, "[lua] %s\n", key.c_str());
     if (m_errorSink) m_errorSink(key);
+}
+
+void ScriptHost::emitLog(const std::string& msg) {
+    std::printf("[lua] %s\n", msg.c_str());
+    std::fflush(stdout);
+    if (m_logSink) m_logSink(msg);
 }
 
 ScriptHost::ScriptFile& ScriptHost::ensureFile(const std::string& path) {
@@ -176,10 +182,14 @@ void ScriptHost::pollReloads() {
         m_reportedErrors.clear();
         std::printf("[lua] reloaded %s\n", path.c_str());
         std::fflush(stdout);
-        for (auto& [entity, inst] : m_instances) {
-            if (inst.path == path) { // re-init below
-                inst.started = false;
-                inst.failed = false;
+        // The same path may back several instances across entities; re-init
+        // every one that shares it.
+        for (auto& [entity, insts] : m_instances) {
+            for (Instance& inst : insts) {
+                if (inst.path == path) { // re-init below
+                    inst.started = false;
+                    inst.failed = false;
+                }
             }
         }
     }
@@ -194,13 +204,15 @@ void ScriptHost::update(Scene& scene, float dt) {
         pollReloads();
     }
 
-    // Snapshot first: scripts may create/destroy entities mid-iteration.
+    // Snapshot first: scripts may create/destroy entities mid-iteration. One
+    // active entry per (entity, path) — an entity may list several scripts.
     std::vector<std::pair<entt::entity, std::string>> active;
     scene.each<Script>([&](Entity e, Script& s) {
-        active.emplace_back(e.handle(), s.path);
+        for (const std::string& path : s.paths)
+            active.emplace_back(e.handle(), path);
     });
 
-    // Drop state for entities that vanished or lost their Script.
+    // Drop state for entities that vanished or lost their Script entirely.
     for (auto it = m_instances.begin(); it != m_instances.end();) {
         const bool alive = std::any_of(
             active.begin(), active.end(),
@@ -208,14 +220,36 @@ void ScriptHost::update(Scene& scene, float dt) {
         it = alive ? std::next(it) : m_instances.erase(it);
     }
 
+    // Within each surviving entity, drop instances whose path is no longer
+    // active (a removed script), then drop now-empty entity keys.
+    for (auto it = m_instances.begin(); it != m_instances.end();) {
+        std::vector<Instance>& insts = it->second;
+        const entt::entity entity = it->first;
+        insts.erase(
+            std::remove_if(
+                insts.begin(), insts.end(),
+                [&](const Instance& inst) {
+                    return !std::any_of(
+                        active.begin(), active.end(), [&](const auto& p) {
+                            return p.first == entity && p.second == inst.path;
+                        });
+                }),
+            insts.end());
+        it = insts.empty() ? m_instances.erase(it) : std::next(it);
+    }
+
     for (auto& [entity, path] : active) {
-        auto it = m_instances.find(entity);
-        if (it == m_instances.end() || it->second.path != path) {
+        std::vector<Instance>& insts = m_instances[entity];
+        auto instIt = std::find_if(
+            insts.begin(), insts.end(),
+            [&](const Instance& inst) { return inst.path == path; });
+        if (instIt == insts.end()) {
             Instance inst;
             inst.path = path;
-            it = m_instances.insert_or_assign(entity, std::move(inst)).first;
+            insts.push_back(std::move(inst));
+            instIt = std::prev(insts.end());
         }
-        Instance& inst = it->second;
+        Instance& inst = *instIt;
         if (!inst.started && !inst.failed) initInstance(inst, entity, scene);
         if (inst.failed || !inst.started) continue;
 

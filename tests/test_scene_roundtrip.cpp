@@ -44,7 +44,7 @@ int main() {
     liminal::Entity mood = scene.create("mood");
     mood.add<liminal::Light>({.color = {1.0f, 0.9f, 0.7f}, .intensity = 0.8f});
     mood.add<liminal::AudioSource>({.gain = 0.2f, .enabled = true});
-    mood.add<liminal::Script>({.path = "scripts/spin.lua"});
+    mood.add<liminal::Script>({.paths = {"scripts/spin.lua"}});
 
     const fs::path path =
         fs::temp_directory_path() / "liminal_test_roundtrip.lscene";

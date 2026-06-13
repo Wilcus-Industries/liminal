@@ -89,6 +89,7 @@ void Window::framebufferSize(int& w, int& h) const {
 }
 
 bool Window::keyDown(int key) const {
+    if (key < 0 || key > GLFW_KEY_LAST) return false;
     return glfwGetKey(m_window, key) == GLFW_PRESS;
 }
 
@@ -101,6 +102,7 @@ bool Window::keyPressed(int key) {
 }
 
 bool Window::mouseDown(int button) const {
+    if (button < 0 || button > GLFW_MOUSE_BUTTON_LAST) return false;
     return glfwGetMouseButton(m_window, button) == GLFW_PRESS;
 }
 

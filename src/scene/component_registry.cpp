@@ -162,12 +162,32 @@ void registerLight(ComponentRegistry& r) {
 void registerScript(ComponentRegistry& r) {
     r.registerComponent<Script>(
         "Script",
-        [](const Script& c) { return nlohmann::json{{"path", c.path}}; },
-        [](Script& c, const nlohmann::json& j) { c.path = j.value("path", ""); },
+        [](const Script& c) { return nlohmann::json{{"paths", c.paths}}; },
+        [](Script& c, const nlohmann::json& j) {
+            if (j.contains("paths") && j["paths"].is_array()) {
+                c.paths.clear();
+                for (const auto& p : j["paths"]) c.paths.push_back(p.get<std::string>());
+            } else if (j.contains("path") && j["path"].is_string()) {
+                // Legacy single-path .lscene; promote to a one-element list.
+                c.paths = {j["path"].get<std::string>()};
+            } else {
+                c.paths.clear();
+            }
+        },
         [](Script& c) {
-            char buf[256];
-            std::snprintf(buf, sizeof(buf), "%s", c.path.c_str());
-            if (ImGui::InputText("path", buf, sizeof(buf))) c.path = buf;
+            int removeIdx = -1;
+            for (std::size_t i = 0; i < c.paths.size(); ++i) {
+                ImGui::PushID(static_cast<int>(i));
+                char buf[256];
+                std::snprintf(buf, sizeof(buf), "%s", c.paths[i].c_str());
+                if (ImGui::InputText("path", buf, sizeof(buf))) c.paths[i] = buf;
+                ImGui::SameLine();
+                if (ImGui::Button("X")) removeIdx = static_cast<int>(i);
+                ImGui::PopID();
+            }
+            if (removeIdx >= 0)
+                c.paths.erase(c.paths.begin() + removeIdx);
+            if (ImGui::Button("Add script")) c.paths.emplace_back();
         });
 }
 

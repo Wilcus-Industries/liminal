@@ -30,6 +30,7 @@
 
 #include <cctype>
 #include <cstdio>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -486,10 +487,7 @@ void bindCore(sol::state& lua, ScriptHost& host) {
     bindEntity(lua);
 
     sol::table lm = lua.create_named_table("lm");
-    lm["log"] = [](const std::string& msg) {
-        std::printf("[lua] %s\n", msg.c_str());
-        std::fflush(stdout);
-    };
+    lm["log"] = [&host](const std::string& msg) { host.emitLog(msg); };
     lm["vec3"] = lua["vec3"];
     lm["vec4"] = lua["vec4"];
 
@@ -563,6 +561,28 @@ void bindCore(sol::state& lua, ScriptHost& host) {
                 return w->keyDown(std::toupper(static_cast<unsigned char>(s[0])));
         }
         return false;
+    };
+    // Mouse-look: accumulated cursor delta since the last call (zeroed on read),
+    // cursor capture toggle (hides+locks the cursor for relative look), and raw
+    // mouse-button state (GLFW button index, 0 = left).
+    input["mouse_delta"] = [&host]() -> std::tuple<float, float> {
+        Window* w = host.input();
+        if (!w) return {0.0f, 0.0f};
+        float dx = 0.0f, dy = 0.0f;
+        w->mouseDelta(dx, dy);
+        return {dx, dy};
+    };
+    input["set_cursor_captured"] = [&host](bool captured) {
+        Window* w = host.input();
+        if (w) w->setCursorCaptured(captured);
+    };
+    input["cursor_captured"] = [&host]() -> bool {
+        Window* w = host.input();
+        return w ? w->cursorCaptured() : false;
+    };
+    input["mouse_down"] = [&host](int button) -> bool {
+        Window* w = host.input();
+        return w ? w->mouseDown(button) : false;
     };
     lm["input"] = input;
 
