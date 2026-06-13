@@ -2,8 +2,7 @@
 
 #include <liminal/procgen/tileset.hpp>
 
-#include <fstream>
-#include <sstream>
+#include <liminal/core/assets.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -53,14 +52,14 @@ TileSet TileSet::fromJsonFile(const std::string& path, const TileSet& base,
                               std::string* err) {
     TileSet ts = base;
 
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
+    // Routed through the VFS so a mounted pak serves the overlay; missing in
+    // both pak and disk keeps the compiled-in fallback.
+    std::optional<std::string> src = Assets::readFile(path);
+    if (!src) {
         if (err) *err = "missing " + path + " (builtin rules in effect)";
         return ts;
     }
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    const auto j = nlohmann::json::parse(ss.str(), nullptr, false);
+    const auto j = nlohmann::json::parse(*src, nullptr, false);
     if (j.is_discarded() || !j.is_object() || !j.contains("tiles") ||
         !j["tiles"].is_object()) {
         if (err) *err = "unparseable " + path + " (builtin rules in effect)";

@@ -94,6 +94,16 @@ const Mesh* AssetCache::mesh(const std::string& name) {
     return &it->second;
 }
 
+std::string AssetCache::addMesh(const std::string& name, const MeshData& data) {
+    constexpr const char* kRuntimePrefix = "runtime:";
+    std::string key =
+        name.rfind(kRuntimePrefix, 0) == 0 ? name : kRuntimePrefix + name;
+    m_failed.erase(key); // a name that failed to resolve before now exists
+    auto [it, inserted] = m_meshes.try_emplace(key, Mesh(data));
+    if (!inserted) it->second = Mesh(data); // overwrite an existing runtime mesh
+    return key;
+}
+
 const Texture* AssetCache::texture(const std::string& name) {
     if (name.empty()) return nullptr;
     if (auto it = m_textures.find(name); it != m_textures.end()) return &it->second;
@@ -102,8 +112,11 @@ const Texture* AssetCache::texture(const std::string& name) {
     std::optional<Texture> built;
     if (isBuiltin(name)) {
         built = makeBuiltinTexture(name.substr(std::string(kBuiltinPrefix).size()));
-    } else {
-        built = Texture::fromFile(Assets::resolve(name));
+    } else if (auto bytes = Assets::readFile(name)) {
+        // Routed through the VFS so a mounted pak serves the image; on disk
+        // (editor) it's the same bytes a plain file read would yield.
+        built = Texture::fromMemory(
+            reinterpret_cast<const unsigned char*>(bytes->data()), bytes->size());
     }
     if (!built) {
         std::fprintf(stderr, "liminal: AssetCache: cannot load texture \"%s\"\n",

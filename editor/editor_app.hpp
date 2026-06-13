@@ -25,11 +25,14 @@
 #include <liminal/render/renderer.hpp>
 #include <liminal/scene/scene.hpp>
 #include <liminal/ui/imgui_layer.hpp>
-#if defined(LIMINAL_WITH_SCRIPTING)
 #include <liminal/script/script_host.hpp>
-#endif
 
 #include "script_editor.hpp"
+
+namespace liminal { class Audio; }
+#if defined(LIMINAL_WITH_INFERENCE)
+namespace liminal::inference { class Engine; }
+#endif
 
 namespace liminal::editor {
 
@@ -37,6 +40,7 @@ class EditorApp {
 public:
     // projectFile may be empty (editor opens with an empty scene, no project).
     explicit EditorApp(std::string projectFile);
+    ~EditorApp(); // out-of-line: m_audio holds an incomplete Audio
     void run();
 
 private:
@@ -69,6 +73,10 @@ private:
     void newScene();
     void openScene(const std::string& path); // resolved via Assets
     bool saveScene(const std::string& path);
+    // Produce a standalone game: copy liminal-player, append a pak of project
+    // assets, make it runnable (codesign on macOS, exec bit on POSIX). Logs each
+    // step to the console; never throws.
+    void buildGame(const std::string& outPath);
     Entity duplicateEntity(entt::entity src);
     void startPlay();
     void stopPlay();
@@ -81,9 +89,15 @@ private:
     Renderer m_renderer;
     AssetCache m_assets;
     ImGuiLayer m_imgui;
-#if defined(LIMINAL_WITH_SCRIPTING)
     std::unique_ptr<ScriptHost> m_scripts; // alive only while playing
+#if defined(LIMINAL_WITH_INFERENCE)
+    // Local LLM engine for lm.ai during Play. Constructed lazily on first Play;
+    // stopped on Stop to release model memory (the engine object persists).
+    std::unique_ptr<inference::Engine> m_inference;
 #endif
+    // Editor-owned audio for Play. Created lazily on first Play and kept alive
+    // (muted via params.enabled on Stop) to avoid device restart churn.
+    std::unique_ptr<Audio> m_audio;
     Scene m_scene;
 
     // --- script editor pane (own TextEditor tabs; logs via our console) ---
@@ -93,6 +107,8 @@ private:
     std::string m_projectFile; // absolute path of project.ljson, "" = none
     std::string m_assetRoot;   // absolute, "" = none
     std::string m_scenePath;   // current scene file, "" = unsaved
+    std::string m_projectTitle;   // project title (defaults to folder name)
+    std::string m_startupScene;   // startupScene from project.ljson (as written)
 
     // --- selection / gizmo ---
     entt::entity m_selected = entt::null;
@@ -131,6 +147,7 @@ private:
     // --- modal path buffers ---
     char m_projectPathBuf[512] = {};
     char m_scenePathBuf[512] = {};
+    char m_buildPathBuf[512] = {};
 };
 
 } // namespace liminal::editor

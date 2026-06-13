@@ -3,6 +3,7 @@
 // Nearest-neighbor filtering everywhere — bilinear smoothing would kill
 // the PS1 look.
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
@@ -63,6 +64,13 @@ public:
     // texture: nearest filtering, CLAMP_TO_EDGE — same contract as sprite().
     // Empty optional on read/decode failure.
     static std::optional<Texture> fromFile(const std::string& path);
+
+    // Decode an in-memory image (PNG etc.) the same way fromFile does — same
+    // nearest/CLAMP_TO_EDGE contract — but from a byte buffer rather than a
+    // path, so a pak-served texture decodes without ever touching disk.
+    // Empty optional on decode failure.
+    static std::optional<Texture> fromMemory(const unsigned char* bytes,
+                                             std::size_t len);
 
     // Width / height of the source image (billboard quads scale by this).
     // 1.0 for the square procedural textures.

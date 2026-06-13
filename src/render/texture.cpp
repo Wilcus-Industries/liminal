@@ -29,7 +29,13 @@
 #include <glad/gl.h>
 
 #define STB_IMAGE_IMPLEMENTATION
+// Whitelist the formats buildGamePak ships (see src/core/pak.cpp). stb treats
+// the STBI_ONLY_* set as an allowlist; without JPEG/TGA/BMP, paks carrying
+// those would fail to decode at runtime.
 #define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_TGA
+#define STBI_ONLY_BMP
 #include <stb_image.h>
 
 namespace liminal {
@@ -274,6 +280,21 @@ std::optional<Texture> Texture::fromFile(const std::string& path) {
     // Force 4 channels so the upload path stays RGBA8 regardless of source.
     std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> data(
         stbi_load(path.c_str(), &w, &h, &channels, 4), &stbi_image_free);
+    if (!data || w <= 0 || h <= 0) {
+        return std::nullopt;
+    }
+    return uploadWH(data.get(), w, h, GL_CLAMP_TO_EDGE);
+}
+
+std::optional<Texture> Texture::fromMemory(const unsigned char* bytes,
+                                           std::size_t len) {
+    if (!bytes || len == 0) return std::nullopt;
+    int w = 0, h = 0, channels = 0;
+    // Same RAII guard and forced-RGBA contract as fromFile; only the source
+    // differs (memory buffer instead of a path).
+    std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> data(
+        stbi_load_from_memory(bytes, static_cast<int>(len), &w, &h, &channels, 4),
+        &stbi_image_free);
     if (!data || w <= 0 || h <= 0) {
         return std::nullopt;
     }

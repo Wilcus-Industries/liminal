@@ -17,6 +17,13 @@ namespace luabind {
 // input, time). Called once from the ScriptHost constructor.
 void bindCore(sol::state& lua, ScriptHost& host);
 
+// Binds lm.procgen.* — the full procgen toolkit (rng, tileset, terrain, WFC,
+// validation, shape grammar, plus a one-shot town() that mirrors the
+// 04_wfc_town example). Lives in its own translation unit (lua_bindings_
+// procgen.cpp) to keep the heavy procgen includes off lua_bindings.cpp.
+// Called from bindCore.
+void bindProcgen(sol::table& lm, sol::state& lua);
+
 // entity:get_component("Name") support: each component binder registers a
 // pusher keyed by its registry name; this turns a raw T* (from
 // ComponentOps::getRaw) into a Lua userdata referencing it. Returns nil for

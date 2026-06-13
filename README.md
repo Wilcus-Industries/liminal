@@ -3,14 +3,19 @@
 A C++20 game engine for small, strange worlds: retro (PS1-flavored) OpenGL
 rendering, an EnTT-backed scene with JSON serialization, Lua scripting,
 procedural generation (WFC, terrain, shape grammar), procedural-DSP audio,
-and local LLM inference via llama.cpp — all statically linked, no runtime
-asset files required by the library itself.
+and local LLM inference via llama.cpp.
+
+liminal is **editor-first**: you open a project folder in `liminal-editor`,
+author scenes and Lua scripts, and ship a standalone executable with one
+click. The engine itself is a static library consumed only by the editor and
+the player — there is no public C++ framework surface to write `main()`
+against.
 
 ## Modules
 
 | Module      | Headers                  | What it does |
 |-------------|--------------------------|--------------|
-| `core`      | `liminal/core/`          | `App` loop, `Window` (GLFW), asset path resolution, `AssetCache` |
+| `core`      | `liminal/core/`          | `App` loop, `Window` (GLFW), asset path resolution, `AssetCache`, pak archive + VFS |
 | `render`    | `liminal/render/`        | Retro renderer (low-res FBO, fog, dithering), `Mesh` primitives, `Shader`, `Texture`; default shaders are embedded in the binary |
 | `scene`     | `liminal/scene/`         | `Scene`/`Entity` facade over `entt::registry`, built-in components, `.lscene` JSON save/load, `ComponentRegistry` |
 | `script`    | `liminal/script/`        | Lua 5.4 + sol2 `ScriptHost`, `lm.*` API, per-entity script environments, hot reload |
@@ -19,43 +24,20 @@ asset files required by the library itself.
 | `audio`     | `liminal/audio/`         | miniaudio device + procedural DSP voice bank |
 | `ui`        | `liminal/ui/`            | Dear ImGui layer (docking branch) |
 
-## Quickstart (FetchContent)
+## Build the toolchain
 
-```cmake
-include(FetchContent)
-FetchContent_Declare(liminal
-    GIT_REPOSITORY https://github.com/you/liminal   # or a local path
-    GIT_TAG        v0.1.0)
-FetchContent_MakeAvailable(liminal)
-
-target_link_libraries(my_game PRIVATE liminal::liminal)
+```sh
+cmake -B build && cmake --build build -j
+ctest --test-dir build        # headless determinism + round-trip tests
 ```
 
-```cpp
-#include <liminal/core/app.hpp>
-#include <liminal/scene/components.hpp>
+This produces two binaries side by side:
 
-int main() {
-    liminal::App app({.title = "hello"});
-    auto crate = app.scene().create("crate");
-    crate.add<liminal::Transform>({.position = {0, 1, -4}});
-    crate.add<liminal::MeshRenderer>({.meshAsset = "builtin:box"});
-    crate.add<liminal::Script>({.path = "scripts/spin.lua"});
-    app.run(nullptr); // built-in scene render + script update
-}
-```
+- `build/editor/liminal-editor` — the authoring environment.
+- `build/player/liminal-player` — the standalone runtime that shipped games
+  are built from (copied next to the editor).
 
-```lua
--- scripts/spin.lua — the script contract: return a table with hooks.
-local M = {}
-function M.on_update(self, dt)
-    local t = self:get_transform()
-    t.rotation.y = t.rotation.y + 90.0 * dt
-end
-return M
-```
-
-## Build requirements
+### Build requirements
 
 - CMake ≥ 3.24, Ninja recommended, a C++20 compiler.
 - Python with the `jinja2` package — the glad OpenGL loader is generated at
@@ -64,8 +46,6 @@ return M
 
 ```sh
 cmake -B build -G Ninja -DPython_EXECUTABLE=/path/to/venv/bin/python
-cmake --build build
-ctest --test-dir build        # headless determinism + .lscene round-trip tests
 ```
 
 The first configure downloads all dependencies (including llama.cpp); the
@@ -76,58 +56,91 @@ first build compiles llama.cpp's Metal kernels — expect it to take a while.
 | Option                   | Default          | Effect |
 |--------------------------|------------------|--------|
 | `LIMINAL_WITH_INFERENCE` | `ON`             | llama.cpp local inference (`liminal/inference/engine.hpp`) |
-| `LIMINAL_WITH_SCRIPTING` | `ON`             | Lua 5.4 + sol2 scripting (`liminal/script/script_host.hpp`) |
 | `LIMINAL_BUILD_EDITOR`   | ON when top-level| `liminal-editor` (pulls ImGuizmo) |
-| `LIMINAL_BUILD_EXAMPLES` | ON when top-level| the `examples/` programs |
+| `LIMINAL_BUILD_PLAYER`   | ON when top-level| `liminal-player` standalone runtime |
 | `LIMINAL_BUILD_TESTS`    | ON when top-level| headless ctest suite |
 
-`LIMINAL_WITH_*` are PUBLIC compile definitions — consumers see the same
-feature set the library was built with.
-
-## Editor
+## Authoring a game
 
 ```sh
-./build/editor/liminal-editor [scene.lscene]
+./build/editor/liminal-editor [path/to/project.ljson]
 ```
 
-Dockable scene editor: hierarchy, registry-driven inspector, ImGuizmo
-translate/rotate/scale (W/E/R, F to frame), `.lscene` open/save, and
-play-in-editor with script hot reload. `editor/sample_project/` is a ready
-scene to poke at.
+Open a **project folder** (containing a `project.ljson`) in the editor. From
+there you get a dockable scene editor — hierarchy, registry-driven inspector,
+ImGuizmo translate/rotate/scale (W/E/R, F to frame), `.lscene` open/save, a
+tabbed script/text editor with Lua completion, and play-in-editor with script
+hot reload. `editor/sample_project/` is a ready project to poke at.
 
-## Examples
+### Scripts
 
-| Example        | Shows |
-|----------------|-------|
-| `01_window`    | minimal `Window` + GL clear loop |
-| `02_retro_cube`| retro renderer, mesh primitives, fog/dither look |
-| `03_scene_lua` | Lua scripts on entities, hot reload |
-| `04_wfc_town`  | full procgen pipeline: terrain → WFC → validator → shape grammar |
-| `05_scene`     | `.lscene` authoring, save/load round-trip |
+A script is a Lua file that returns a behavior table. Attach it to an entity
+via a `Script` component (set its path in the inspector). Each instance runs in
+its own environment (globals readable, writes stay local). Two optional hooks:
 
-Run from the repo root, e.g. `./build/examples/01_window/01_window` (ESC quits).
+```lua
+local M = {}
 
-## Installing / find_package
+function M.on_start(self)            -- once, when the scene / Play begins
+    lm.log("hello from " .. self.name)
+end
 
-```sh
-cmake --install build --prefix /opt/liminal
+function M.on_update(self, dt)        -- every frame; dt = seconds since last
+    local t = self:get_transform()
+    t.rotation.y = t.rotation.y + 90.0 * dt
+end
+
+return M
 ```
 
-The installed package is self-contained: every FetchContent dependency (glm,
-nlohmann_json, EnTT, sol2 + Lua, imgui, glfw, glad, stb, miniaudio,
-llama.cpp) is compiled in or installed alongside and exported under the
-`liminal::` namespace. Consumers need only:
+`self` is the owning entity. Both hooks are `pcall`'d — an error is logged
+(deduped) and won't crash the game. In the editor, scripts hot-reload on a
+0.5 s mtime watch while in Play mode.
 
-```cmake
-find_package(liminal 0.1 CONFIG REQUIRED)   # CMAKE_PREFIX_PATH=/opt/liminal
-target_link_libraries(my_game PRIVATE liminal::liminal)
-```
+**Entity API** (`self` and anything from `lm.scene`):
 
-Limitations: the install ships static libraries for one platform/arch as
-built; third-party headers land under namespaced dirs (`liminal-imgui/`,
-`liminal-lua/`, ...) plus standard ones (`glm/`, `nlohmann/`, `entt/`,
-`sol/`, `GLFW/`). For day-to-day development the FetchContent path above is
-the primary, most-tested route.
+| Call | Result |
+|------|--------|
+| `self.name` | get / set the `Name` string |
+| `self:valid()` / `self:destroy()` | liveness / kill |
+| `self:get_transform()` | `Transform` (auto-added if missing) |
+| `self:get_mesh_renderer()` | `MeshRenderer`, or `nil` if absent |
+| `self:get_component("X")` | raw component pointer, or `nil` |
+
+`Transform` exposes `.position`, `.rotation` (euler degrees, Y→X→Z), `.scale`
+as mutable-by-reference `vec3`s, plus `:set_position/rotation/scale(x,y,z)`.
+`MeshRenderer` exposes `.mesh`, `.texture`, `.color`, and `:set_color(r,g,b,a)`.
+Component pointers are valid for the current frame only — never cache them
+across frames.
+
+### The `lm` global
+
+| Namespace     | What it exposes |
+|---------------|-----------------|
+| `lm.log` / `lm.vec3` / `lm.vec4` | print to the console; vector constructors (`+ - *`, `:length()`) |
+| `lm.scene`    | `find` / `find_all` / `create` / `each` / `destroy` entities, `change` (scene swap — player only) |
+| `lm.input`    | `key_down(key)` — GLFW keycode or single-char string |
+| `lm.time`     | `now()` — seconds elapsed (per-frame delta is the `dt` arg to `on_update`) |
+| `lm.audio`    | `set` / `get` voice params, `event` (one-shot: step/jump/mumble/door_creak), `ok` |
+| `lm.ai`       | local LLM: `start` / `submit` / `poll` / `cancel` / `forget` / `status` (gated on `LIMINAL_WITH_INFERENCE`; feature-test `if lm.ai then`) |
+| `lm.procgen`  | the procgen pipeline: terrain, WFC, shape grammar, plus a one-shot `town{}` |
+| `lm.assets`   | `add_mesh` — register a runtime mesh |
+
+## Shipping a standalone game
+
+In the editor, use **Game → Build Game…**. The editor packs the project's
+scenes, scripts, and assets into a `.pak` archive and produces a single
+self-contained executable based on `liminal-player`:
+
+- **Windows / Linux:** the pak is appended to a copy of the player binary —
+  one file, no sidecar.
+- **macOS:** the executable ships with a sidecar `.pak` next to it (codesigning
+  rejects a Mach-O with data appended after the load commands).
+
+Any `.gguf` inference models referenced by the project are copied beside the
+shipped executable. Launching the player locates its pak (embedded in its own
+binary, or the sidecar), mounts it as the virtual filesystem, and runs the
+game with hot reload off.
 
 ## Version & license
 

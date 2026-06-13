@@ -38,6 +38,14 @@ public:
     const Mesh* mesh(const std::string& name);
     const Texture* texture(const std::string& name);
 
+    // Registers (or overwrites) a runtime-built mesh. The storage key is
+    // "runtime:" + name unless name already begins with "runtime:". Any
+    // warn-once memo for that key is cleared so a previously-unknown name now
+    // resolves. Returns the storage key (look the mesh up with mesh(key) if you
+    // need the pointer). Used by lm.assets.add_mesh so scripts can feed
+    // procedural geometry to the cache and get back the resolvable name.
+    std::string addMesh(const std::string& name, const MeshData& data);
+
 private:
     std::unordered_map<std::string, Mesh> m_meshes;
     std::unordered_map<std::string, Texture> m_textures;

@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -22,8 +23,8 @@ namespace liminal {
 
 namespace fs = std::filesystem;
 
-ScriptHost::ScriptHost(Window* input)
-    : m_input(input), m_epoch(std::chrono::steady_clock::now()) {
+ScriptHost::ScriptHost(ScriptContext ctx)
+    : m_ctx(std::move(ctx)), m_epoch(std::chrono::steady_clock::now()) {
     m_lua.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string,
                          sol::lib::table, sol::lib::os);
     // The os library is opened only for time/clock/date/difftime; strip the
@@ -66,14 +67,26 @@ ScriptHost::ScriptFile& ScriptHost::ensureFile(const std::string& path) {
 
     ScriptFile file;
     file.resolved = Assets::resolve(path);
-    std::ifstream in(file.resolved, std::ios::binary);
-    if (in) {
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        file.source = ss.str();
+
+    // The VFS reads pak-first (a shipped game must not be shadowed by stray
+    // files), so go through Assets::readFile. A pak hit carries no mtime, so we
+    // flag fromPak (pollReloads skips it). We detect "served from pak" by
+    // whether the same name resolves to a real file on disk: if it doesn't,
+    // the bytes can only have come from the pak. Disk-sourced files keep the
+    // mtime hot-reload exactly as before.
+    std::optional<std::string> bytes = Assets::readFile(path);
+    if (bytes) {
         std::error_code ec;
-        file.mtime = fs::last_write_time(file.resolved, ec);
+        const bool onDisk = fs::exists(file.resolved, ec) &&
+                            !fs::is_directory(file.resolved, ec);
+        file.source = std::move(*bytes);
         file.ok = true;
+        if (onDisk) {
+            file.mtime = fs::last_write_time(file.resolved, ec);
+        } else {
+            file.fromPak = true;
+            file.resolved = path; // pak key; @-chunkname for stack traces
+        }
     } else {
         reportError(path, "cannot open script file (resolved to '" +
                               file.resolved + "')");
@@ -137,14 +150,22 @@ void ScriptHost::initInstance(Instance& inst, entt::entity e, Scene& scene) {
 }
 
 void ScriptHost::pollReloads() {
+    if (!m_ctx.hotReload) return;
     std::vector<std::string> changed;
     for (auto& [path, file] : m_files) {
         std::error_code ec;
+        if (file.fromPak) continue; // no mtime — pak contents never change
         if (!file.ok) {
             // A previously-missing file that appears counts as a change.
             if (fs::exists(Assets::resolve(path), ec)) changed.push_back(path);
             continue;
         }
+        // Edge case (low impact): if a pak is mounted AND the same name also
+        // exists on disk, this file was flagged disk-sourced (not fromPak), so
+        // its mtime is watched — but ensureFile reads pak-first, so re-reading
+        // after a disk edit yields the pak bytes, not the edited file. Only
+        // hits a hot-reload host with a pak mounted; the player sets
+        // hotReload=false, so it never reaches here.
         const auto mtime = fs::last_write_time(file.resolved, ec);
         if (!ec && mtime != file.mtime) changed.push_back(path);
     }

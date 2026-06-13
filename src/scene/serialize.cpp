@@ -1,12 +1,14 @@
 // .lscene serialization (format documented in <liminal/scene/serialize.hpp>).
 #include <liminal/scene/serialize.hpp>
 
+#include <liminal/core/assets.hpp>
 #include <liminal/scene/component_registry.hpp>
 #include <liminal/scene/scene.hpp>
 
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -94,20 +96,27 @@ bool Scene::save(const std::string& path) const {
     return file.good();
 }
 
-Scene Scene::load(const std::string& path) {
-    std::ifstream file(path);
-    if (!file) {
-        throw std::runtime_error("liminal: scene load: cannot read \"" + path + "\"");
-    }
+Scene loadFromString(const std::string& json, const std::string& nameForErrors) {
     nlohmann::json j;
     try {
-        file >> j;
+        j = nlohmann::json::parse(json);
     } catch (const nlohmann::json::exception& ex) {
-        throw std::runtime_error("liminal: scene load: \"" + path + "\": " + ex.what());
+        throw std::runtime_error("liminal: scene load: \"" + nameForErrors +
+                                 "\": " + ex.what());
     }
     Scene scene;
     sceneFromJson(scene, j);
     return scene;
+}
+
+Scene Scene::load(const std::string& path) {
+    // Routed through the VFS so a mounted pak transparently serves scenes; the
+    // editor (no pak) falls through to a plain binary disk read.
+    std::optional<std::string> src = Assets::readFile(path);
+    if (!src) {
+        throw std::runtime_error("liminal: scene load: cannot read \"" + path + "\"");
+    }
+    return loadFromString(*src, path);
 }
 
 } // namespace liminal

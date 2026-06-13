@@ -8,19 +8,14 @@
 
 #include <imgui.h>
 
-#if defined(LIMINAL_WITH_SCRIPTING)
-// Defined in src/script/lua_bindings.cpp (compiled only when scripting is
-// ON, like this block). Declared here instead of including the sol2-heavy
-// header so this file stays scripting-agnostic.
+// Defined in src/script/lua_bindings.cpp. Declared here instead of including
+// the sol2-heavy header so this file stays scripting-agnostic.
 namespace liminal::luabind {
 void bindName(void* luaState);
 void bindTransform(void* luaState);
 void bindMeshRenderer(void* luaState);
 } // namespace liminal::luabind
 #define LIMINAL_LUABIND(fn) (&liminal::luabind::fn)
-#else
-#define LIMINAL_LUABIND(fn) nullptr
-#endif
 
 namespace liminal {
 

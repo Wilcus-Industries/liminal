@@ -31,10 +31,6 @@
 // are stripped). io is not opened at all. The lm.* API surface is bound in
 // src/script/lua_bindings.cpp.
 
-#ifndef LIMINAL_WITH_SCRIPTING
-#error "liminal/script/script_host.hpp requires the scripting module; configure liminal with LIMINAL_WITH_SCRIPTING=ON"
-#endif
-
 #include <chrono>
 #include <filesystem>
 #include <functional>
@@ -49,12 +45,36 @@ namespace liminal {
 
 class Scene;
 class Window;
+class Audio;
+class AssetCache;
+#if defined(LIMINAL_WITH_INFERENCE)
+namespace inference { class Engine; }
+#endif
+
+// The host's view of the surrounding app: which subsystems the lm.* API may
+// reach. All pointers may be null — every binding null-guards (setters no-op,
+// getters return defaults, with a once-per-session warning). App and the
+// editor each build their own context.
+struct ScriptContext {
+    Window* input = nullptr;        // lm.input.key_down
+    Audio* audio = nullptr;         // lm.audio.*
+    AssetCache* assets = nullptr;   // lm.assets.*
+#if defined(LIMINAL_WITH_INFERENCE)
+    inference::Engine* inference = nullptr; // wired in a later chunk; field now
+#endif
+    bool hotReload = true;          // pollReloads() is a no-op when false
+    // Deferred scene switch for lm.scene.change(path). Null = unsupported
+    // (lm.scene.change then warns once). App stores a pending path and swaps
+    // at end of frame; the editor logs that Play doesn't support it.
+    std::function<void(const std::string&)> requestSceneChange;
+};
 
 class ScriptHost {
 public:
-    // `input` powers lm.input.key_down; pass nullptr for a windowless host
-    // (input queries then return false). App wires its Window in.
-    explicit ScriptHost(Window* input = nullptr);
+    // The context names the subsystems the lm.* API may touch; see
+    // ScriptContext. The default {} is a fully windowless/subsystem-less host
+    // (input false, audio/assets no-op) — handy for tests.
+    explicit ScriptHost(ScriptContext ctx = {});
     ~ScriptHost();
 
     ScriptHost(const ScriptHost&) = delete;
@@ -66,9 +86,13 @@ public:
     // Escape hatch: the raw state, for apps that want to bind extra API.
     sol::state& lua() { return m_lua; }
 
+    // The subsystem context this host was built with (lm.* bindings close
+    // over it through the host).
+    const ScriptContext& context() const { return m_ctx; }
+
     // Valid during update() (lm.scene closes over the host); null outside.
     Scene* activeScene() { return m_scene; }
-    Window* input() { return m_input; }
+    Window* input() { return m_ctx.input; }
     // Seconds since host construction — what lm.time.now() returns.
     double now() const;
 
@@ -83,8 +107,10 @@ private:
     struct ScriptFile {
         std::string resolved;                    // Assets::resolve result
         std::string source;                      // file contents
-        std::filesystem::file_time_type mtime{}; // for hot reload
+        std::filesystem::file_time_type mtime{}; // for hot reload (disk only)
         bool ok = false;                         // file read successfully
+        bool fromPak = false;                    // served from a mounted pak —
+                                                 // no mtime; pollReloads skips
     };
     struct Instance {
         std::string path;     // Script.path as authored (file table key)
@@ -100,7 +126,7 @@ private:
     void reportError(const std::string& path, const std::string& message);
 
     sol::state m_lua;
-    Window* m_input = nullptr;
+    ScriptContext m_ctx;
     Scene* m_scene = nullptr;
     std::unordered_map<std::string, ScriptFile> m_files;      // by Script.path
     std::unordered_map<entt::entity, Instance> m_instances;

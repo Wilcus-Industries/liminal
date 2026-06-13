@@ -108,27 +108,25 @@ if(LIMINAL_WITH_INFERENCE)
     unset(_liminal_saved_cxx_standard)
 endif()
 
-# --- Lua 5.4 + sol2 (scripting) — gated by LIMINAL_WITH_SCRIPTING ------------
-if(LIMINAL_WITH_SCRIPTING)
-    # walterschell/Lua wraps the upstream Lua 5.4 sources in a tidy CMake
-    # build; exposes target `lua_static`.
-    set(LUA_BUILD_BINARY  OFF CACHE BOOL "" FORCE)
-    set(LUA_BUILD_COMPILER OFF CACHE BOOL "" FORCE)
-    set(LUA_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
-    set(LUA_ENABLE_SHARED  OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(lua
-        GIT_REPOSITORY https://github.com/walterschell/Lua
-        GIT_TAG        v5.4.7
-        GIT_SHALLOW    TRUE)
+# --- Lua 5.4 + sol2 (scripting) — always built, non-optional -----------------
+# walterschell/Lua wraps the upstream Lua 5.4 sources in a tidy CMake
+# build; exposes target `lua_static`.
+set(LUA_BUILD_BINARY  OFF CACHE BOOL "" FORCE)
+set(LUA_BUILD_COMPILER OFF CACHE BOOL "" FORCE)
+set(LUA_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(LUA_ENABLE_SHARED  OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(lua
+    GIT_REPOSITORY https://github.com/walterschell/Lua
+    GIT_TAG        v5.4.7
+    GIT_SHALLOW    TRUE)
 
-    set(SOL2_BUILD_LUA OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(sol2
-        GIT_REPOSITORY https://github.com/ThePhD/sol2
-        GIT_TAG        v3.5.0
-        GIT_SHALLOW    TRUE)
+set(SOL2_BUILD_LUA OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(sol2
+    GIT_REPOSITORY https://github.com/ThePhD/sol2
+    GIT_TAG        v3.5.0
+    GIT_SHALLOW    TRUE)
 
-    FetchContent_MakeAvailable(lua sol2)
-endif()
+FetchContent_MakeAvailable(lua sol2)
 
 # --- ImGuizmo (gizmos) — sources only; compiled into liminal-editor ----------
 if(LIMINAL_BUILD_EDITOR)

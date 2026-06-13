@@ -7,13 +7,14 @@
 
 #include <liminal/procgen/shape_grammar.hpp>
 
+#include <liminal/core/assets.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <deque>
-#include <fstream>
-#include <sstream>
+#include <optional>
 
 #include <nlohmann/json.hpp>
 
@@ -171,11 +172,11 @@ void addPyramidRoof(MeshData& md, std::vector<PartBox>& boxes,
 } // namespace
 
 void applyFamilyParamsJson(FamilyParams& p, const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return; // the caller's defaults are a full rule set
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    const auto j = nlohmann::json::parse(ss.str(), nullptr, false);
+    // Routed through the VFS so a mounted pak serves the overlay; missing in
+    // both pak and disk keeps the caller's defaults (a full rule set).
+    std::optional<std::string> src = Assets::readFile(path);
+    if (!src) return;
+    const auto j = nlohmann::json::parse(*src, nullptr, false);
     if (j.is_discarded() || !j.is_object()) {
         std::fprintf(stderr, "[grammar] unparseable %s, using builtins\n", path.c_str());
         return;

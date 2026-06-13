@@ -11,13 +11,21 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include <liminal/audio/audio.hpp>
 #include <liminal/core/assets.hpp>
+#include <liminal/core/pak.hpp>
+#include <liminal/core/platform.hpp>
 #include <liminal/scene/component_registry.hpp>
 #include <liminal/scene/serialize.hpp>
+#if defined(LIMINAL_WITH_INFERENCE)
+#include <liminal/inference/engine.hpp>
+#endif
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -47,6 +55,25 @@ std::string entityLabel(entt::registry& reg, entt::entity e) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "entity %u", entt::to_integral(e));
     return buf;
+}
+
+// Fast reject for extensions the Script Editor would only refuse via its
+// content sniff anyway. Unknown extensions still go through open(), whose NUL
+// check is the authoritative binary guard.
+std::string toLower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    return s;
+}
+
+bool isKnownBinaryExt(const std::string& extLower) {
+    static const char* kBinary[] = {
+        ".png", ".jpg",  ".jpeg", ".tga", ".bmp", ".dds", ".ktx", ".ttf",
+        ".otf", ".wav",  ".ogg",  ".mp3", ".bin", ".glb", ".fbx", ".o",
+        ".a",   ".dylib", ".so",  ".dll", ".exe"};
+    for (const char* b : kBinary)
+        if (extLower == b) return true;
+    return false;
 }
 
 } // namespace
@@ -85,6 +112,8 @@ EditorApp::EditorApp(std::string projectFile)
     if (!projectFile.empty()) openProject(projectFile);
 }
 
+EditorApp::~EditorApp() = default;
+
 // --- loop --------------------------------------------------------------------
 
 void EditorApp::run() {
@@ -98,10 +127,8 @@ void EditorApp::run() {
         m_imgui.beginFrame();
         ImGuizmo::BeginFrame();
 
-#if defined(LIMINAL_WITH_SCRIPTING)
         if (m_mode == Mode::Play && !m_paused && m_scripts)
             m_scripts->update(m_scene, m_dt);
-#endif
 
         // Render the scene into the renderer's low-res FBO. endFrame's blit to
         // the backbuffer is fully covered by the dockspace; the viewport panel
@@ -220,6 +247,7 @@ void EditorApp::buildDefaultLayout(unsigned int dockspaceId) {
 
 void EditorApp::drawMenuBar() {
     bool wantOpenProject = false, wantOpenScene = false, wantSaveAs = false;
+    bool wantBuild = false;
 
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -245,6 +273,13 @@ void EditorApp::drawMenuBar() {
                 m_paused = !m_paused;
             if (ImGui::MenuItem("Stop", nullptr, false, m_mode == Mode::Play))
                 stopPlay();
+            ImGui::Separator();
+            const bool canBuild = m_mode == Mode::Edit && !m_assetRoot.empty() &&
+                                  !m_projectFile.empty();
+            if (ImGui::MenuItem("Build Game...", nullptr, false, canBuild))
+                wantBuild = true;
+            if (!canBuild && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Open a project and stop Play to build a game.");
             ImGui::EndMenu();
         }
         ImGui::TextDisabled("| %s%s",
@@ -287,6 +322,17 @@ void EditorApp::drawMenuBar() {
                       m_scenePath.c_str());
         ImGui::OpenPopup("Save Scene As");
     }
+    if (wantBuild) {
+        // Default output: <projectDir>/../<name>-build/<name>(.exe). Derive the
+        // game name from the project folder. All via fs::path for portability.
+        const fs::path projDir = fs::path(m_projectFile).parent_path();
+        std::string name = projDir.filename().string();
+        if (name.empty()) name = "game";
+        fs::path out = projDir.parent_path() / (name + "-build") / name;
+        std::snprintf(m_buildPathBuf, sizeof(m_buildPathBuf), "%s",
+                      out.lexically_normal().string().c_str());
+        ImGui::OpenPopup("Build Game");
+    }
 
     if (ImGui::BeginPopupModal("Open Project", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -321,6 +367,20 @@ void EditorApp::drawMenuBar() {
         ImGui::InputText("##savepath", m_scenePathBuf, sizeof(m_scenePathBuf));
         if (ImGui::Button("Save")) {
             saveScene(m_scenePathBuf);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if (ImGui::BeginPopupModal("Build Game", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(
+            "Output game executable (a platform suffix is added as needed):");
+        ImGui::SetNextItemWidth(520);
+        ImGui::InputText("##buildpath", m_buildPathBuf, sizeof(m_buildPathBuf));
+        if (ImGui::Button("Build")) {
+            buildGame(m_buildPathBuf);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -638,24 +698,28 @@ void EditorApp::drawAssetBrowser() {
             return;
         }
         const fs::path p(e.path);
-        const bool isLua = p.extension() == ".lua";
+        std::string ext = p.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return char(std::tolower(c)); });
         if (ImGui::Selectable(e.name.c_str(), false,
                               ImGuiSelectableFlags_AllowDoubleClick)) {
             const bool dbl = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-            if (p.extension() == ".lscene") {
+            if (ext == ".lscene") {
                 openScene(e.path);
-            } else if (isLua) {
+            } else if (isKnownBinaryExt(ext)) {
+                m_browserStatus = e.path;
+            } else {
+                // Any other file: try to edit it. open() sniffs content and
+                // refuses binaries with an unknown extension.
                 if (dbl && m_scriptEditor) {
                     m_scriptEditor->open(e.path); // opens + focuses the pane
                     ImGui::SetWindowFocus("Script Editor");
                 } else {
-                    m_browserStatus = "script: " + e.path +
+                    m_browserStatus = "file: " + e.path +
                                       " (double-click to edit)";
-                    log("[editor] script selected: " + e.path +
+                    log("[editor] file selected: " + e.path +
                         " (double-click opens it in the Script Editor)");
                 }
-            } else {
-                m_browserStatus = e.path;
             }
         }
     };
@@ -730,12 +794,15 @@ void EditorApp::openProject(const std::string& projectFile) {
         (p.parent_path() / j.value("assetRoot", ".")).lexically_normal();
     m_assetRoot = root.string();
     Assets::addSearchPath(m_assetRoot);
+    // Title defaults to the project folder name; startupScene kept verbatim for
+    // the Build step (it's relative to assetRoot in project.ljson).
+    m_projectTitle = j.value("title", p.parent_path().filename().string());
+    m_startupScene = j.value("startupScene", "");
     refreshAssetTree();
     log("[editor] project open: " + m_projectFile + " (asset root " +
         m_assetRoot + ")");
 
-    const std::string startup = j.value("startupScene", "");
-    if (!startup.empty()) openScene(startup);
+    if (!m_startupScene.empty()) openScene(m_startupScene);
 }
 
 void EditorApp::newScene() {
@@ -772,6 +839,136 @@ bool EditorApp::saveScene(const std::string& path) {
     return true;
 }
 
+void EditorApp::buildGame(const std::string& outPath) {
+    if (m_assetRoot.empty() || m_projectFile.empty()) {
+        log("[build] no project open");
+        return;
+    }
+    log("[build] building game -> " + outPath);
+
+    // 1. Locate the prebuilt player beside the editor.
+#if defined(_WIN32)
+    const char* playerName = "liminal-player.exe";
+#else
+    const char* playerName = "liminal-player";
+#endif
+    const fs::path player = fs::path(selfExeDir()) / playerName;
+    std::error_code ec;
+    if (!fs::exists(player, ec)) {
+        log("[build] liminal-player not found beside editor (" + player.string() +
+            "); build the liminal-player target first");
+        return;
+    }
+
+    // 2. Output exe path (ensure .exe on Windows) + parent dirs.
+    fs::path outExe = fs::path(outPath);
+#if defined(_WIN32)
+    if (toLower(outExe.extension().string()) != ".exe")
+        outExe.replace_extension(".exe");
+#endif
+    fs::create_directories(outExe.parent_path(), ec);
+    if (ec) {
+        log("[build] cannot create output directory: " + ec.message());
+        return;
+    }
+
+    // 3-4. Collect assets + synthesized project.ljson into a pak. Skip the
+    // build output dir if it happens to sit under the asset root.
+    PakWriter pak;
+    const auto logFn = [this](const std::string& m) { log(m); };
+    if (!buildGamePak(m_assetRoot, m_startupScene, m_projectTitle, pak,
+                      outExe.parent_path().string(), logFn)) {
+        log("[build] failed to collect project assets");
+        return;
+    }
+
+    // 5. Copy player -> outExe, then append the pak.
+    try {
+        fs::copy_file(player, outExe, fs::copy_options::overwrite_existing);
+    } catch (const std::exception& e) {
+        log("[build] copy player failed: " + std::string(e.what()));
+        return;
+    }
+    bool sidecar = false;
+    if (!pak.appendTo(outExe.string())) {
+        log("[build] failed to append pak to " + outExe.string());
+        return;
+    }
+#if !defined(_WIN32)
+    fs::permissions(outExe,
+                    fs::perms::owner_exec | fs::perms::group_exec |
+                        fs::perms::others_exec,
+                    fs::perm_options::add, ec);
+    if (ec) log("[build] warning: could not set exec bit: " + ec.message());
+#endif
+
+    // 6. Platform integrity. macOS: appending bytes to a signed binary breaks
+    // its signature; re-sign ad-hoc. If that fails, fall back to a sidecar pak
+    // beside a clean (unmodified, still-valid) player copy.
+#if defined(__APPLE__)
+    // The path is wrapped in double quotes for the shell; a literal '"' in the
+    // output path would break the quoting (and could splice the command). Skip
+    // signing and fall back to the sidecar path rather than run a malformed
+    // command. (Such a path is pathological — '"' is legal but near-unheard-of
+    // in a build output location.)
+    const int rc = (outExe.string().find('"') != std::string::npos)
+                       ? -1
+                       : std::system(("codesign --force -s - \"" +
+                                      outExe.string() + "\"")
+                                         .c_str());
+    if (rc != 0) {
+        log("[build] codesign failed (rc=" + std::to_string(rc) +
+            "); falling back to sidecar pak");
+        try {
+            fs::copy_file(player, outExe, fs::copy_options::overwrite_existing);
+        } catch (const std::exception& e) {
+            log("[build] clean player re-copy failed: " + std::string(e.what()));
+            return;
+        }
+#if !defined(_WIN32)
+        fs::permissions(outExe,
+                        fs::perms::owner_exec | fs::perms::group_exec |
+                            fs::perms::others_exec,
+                        fs::perm_options::add, ec);
+#endif
+        // Sidecar path must match the player's lookup: <exeDir>/<exeStem>.pak.
+        const fs::path side =
+            outExe.parent_path() / (outExe.stem().string() + ".pak");
+        { std::ofstream(side.string(), std::ios::binary | std::ios::trunc); }
+        if (!pak.appendTo(side.string())) {
+            log("[build] failed to write sidecar pak: " + side.string());
+            return;
+        }
+        sidecar = true;
+        log("[build] sidecar pak: " + side.string());
+    } else {
+        log("[build] codesign ok (ad-hoc); pak appended to exe");
+    }
+#else
+    log("[build] pak appended to exe");
+#endif
+
+    // 7. Copy .gguf models beside the exe (they ship next to it, not in the pak).
+    for (fs::recursive_directory_iterator it(fs::path(m_assetRoot),
+             fs::directory_options::skip_permission_denied, ec), end;
+         it != end; it.increment(ec)) {
+        if (ec) { ec.clear(); continue; }
+        if (!it->is_regular_file(ec)) continue;
+        if (toLower(it->path().extension().string()) != ".gguf") continue;
+        const fs::path dst = outExe.parent_path() / it->path().filename();
+        std::error_code cec;
+        fs::copy_file(it->path(), dst, fs::copy_options::overwrite_existing, cec);
+        if (cec)
+            log("[build] warning: copy model failed: " + it->path().filename().string());
+        else
+            log("[build] model: " + it->path().filename().string());
+    }
+
+    // 8. Done.
+    log("[build] complete: " + outExe.string() +
+        (sidecar ? " (sidecar pak mode)" : " (appended pak mode)"));
+}
+
 Entity EditorApp::duplicateEntity(entt::entity src) {
     entt::registry& reg = m_scene.registry();
     Entity dup = m_scene.create(); // bare entity; components copied below
@@ -788,21 +985,45 @@ void EditorApp::startPlay() {
     m_playSnapshot = sceneToJson(m_scene);
     m_mode = Mode::Play;
     m_paused = false;
-#if defined(LIMINAL_WITH_SCRIPTING)
+    // Editor-owned audio: created on first Play, re-enabled on subsequent ones
+    // (Stop only mutes — see stopPlay — to dodge device restart churn). A
+    // device that fails to open leaves m_audio null (CI/headless); the lm.audio
+    // bindings null-guard, so Play still runs without sound.
+    if (!m_audio) {
+        auto a = std::make_unique<Audio>(1);
+        if (a->ok()) m_audio = std::move(a);
+    }
+    if (m_audio) m_audio->params.enabled = true;
     // Fresh host per play session: clean Lua state, on_start re-runs,
     // parked-error memory wiped.
-    m_scripts = std::make_unique<ScriptHost>(&m_window);
+    ScriptContext ctx;
+    ctx.input = &m_window;
+    ctx.audio = m_audio.get();
+    ctx.assets = &m_assets;
+#if defined(LIMINAL_WITH_INFERENCE)
+    // Cheap to construct (no worker until lm.ai.start); created on first Play
+    // and reused. stopPlay stops it to free model memory.
+    if (!m_inference) m_inference = std::make_unique<inference::Engine>();
+    ctx.inference = m_inference.get();
+#endif
+    ctx.requestSceneChange = [this](const std::string&) {
+        log("[script] lm.scene.change unsupported in editor Play");
+    };
+    m_scripts = std::make_unique<ScriptHost>(std::move(ctx));
     m_scripts->setErrorSink(
         [this](const std::string& msg) { log("[lua] " + msg); });
-#endif
     log("[editor] play");
 }
 
 void EditorApp::stopPlay() {
     if (m_mode != Mode::Play) return;
-#if defined(LIMINAL_WITH_SCRIPTING)
     m_scripts.reset();
+#if defined(LIMINAL_WITH_INFERENCE)
+    // Release model memory between play sessions; the engine object persists
+    // and start()s again on the next lm.ai.start.
+    if (m_inference) m_inference->stop();
 #endif
+    if (m_audio) m_audio->params.enabled = false; // mute, keep device alive
     m_scene = Scene();
     sceneFromJson(m_scene, m_playSnapshot);
     m_playSnapshot = nullptr;

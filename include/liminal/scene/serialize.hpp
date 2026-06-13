@@ -40,6 +40,12 @@ class Scene;
 nlohmann::json sceneToJson(const Scene& scene);
 void sceneFromJson(Scene& scene, const nlohmann::json& j);
 
+// Parse a .lscene JSON document from a string into a fresh Scene. `nameForErrors`
+// is the source name (file path or pak key) used in thrown error messages.
+// Throws std::runtime_error on parse failure or a missing/wrong version tag.
+// Scene::load(path) is this plus an Assets::readFile front end.
+Scene loadFromString(const std::string& json, const std::string& nameForErrors);
+
 } // namespace liminal
 
 // glm adapters in glm's namespace so nlohmann finds them by ADL.

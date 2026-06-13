@@ -19,12 +19,9 @@ target_link_libraries(liminal-editor PRIVATE liminal::liminal liminal::imgui glf
 
 # Diagnostics compile the buffer with luaL_loadstring in a throwaway lua_State,
 # so the pane needs the Lua C API directly. liminal already links lua_static
-# PUBLIC (and defines LIMINAL_WITH_SCRIPTING) when scripting is on, so the
-# headers/lib reach us transitively — but name it explicitly and gated, to
+# PUBLIC, so the headers/lib reach us transitively — but name it explicitly to
 # match how src/ links Lua and to stay correct if that interface ever narrows.
-# With scripting OFF, completions still work (static tables); only diagnostics
-# are #if'd out.
-if(LIMINAL_WITH_SCRIPTING AND TARGET lua_static)
+if(TARGET lua_static)
     target_link_libraries(liminal-editor PRIVATE lua_static)
 endif()
 

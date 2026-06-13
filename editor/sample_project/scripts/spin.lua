@@ -1,6 +1,6 @@
 -- spin.lua: rotate the owning entity and pulse its tint. Edit `speed` while
 -- the editor is in Play mode to watch hot reload.
-local speed = 500.0 -- degrees per second
+local speed = 90.0 -- degrees per second
 
 local M = {}
 
@@ -20,4 +20,7 @@ function M.on_update(self, dt)
 end
 
 return M
+
+
+
 

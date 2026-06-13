@@ -39,9 +39,7 @@
 #include <liminal/inference/engine.hpp>
 #endif
 
-#ifdef LIMINAL_WITH_SCRIPTING
 #include <liminal/script/script_host.hpp>
-#endif
 
 namespace liminal {
 

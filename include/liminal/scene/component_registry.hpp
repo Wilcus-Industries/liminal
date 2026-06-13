@@ -45,7 +45,7 @@ struct ComponentOps {
     // also register a pusher with liminal::luabind so
     // entity:get_component("Name") can hand the component to Lua (see
     // src/script/lua_bindings.cpp for the built-in pattern). Null = the
-    // component is not scriptable. Ignored when LIMINAL_WITH_SCRIPTING=OFF.
+    // component is not scriptable.
     void (*luaBind)(void* luaState) = nullptr;
 };
 
