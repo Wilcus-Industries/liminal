@@ -4,13 +4,29 @@
 add_executable(liminal-editor
     main.cpp
     editor_app.cpp
-    ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp)
+    script_editor.cpp
+    lua_complete.cpp
+    ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp
+    ${imguicolortextedit_SOURCE_DIR}/TextEditor.cpp)
 
-target_include_directories(liminal-editor PRIVATE ${imguizmo_SOURCE_DIR}/src)
+target_include_directories(liminal-editor PRIVATE
+    ${imguizmo_SOURCE_DIR}/src
+    ${imguicolortextedit_SOURCE_DIR})
 
 # glfw for GLFW_KEY_* constants; liminal_imgui already carries the ImGui
 # include dirs (incl. imgui_internal.h for the DockBuilder API).
 target_link_libraries(liminal-editor PRIVATE liminal::liminal liminal::imgui glfw)
+
+# Diagnostics compile the buffer with luaL_loadstring in a throwaway lua_State,
+# so the pane needs the Lua C API directly. liminal already links lua_static
+# PUBLIC (and defines LIMINAL_WITH_SCRIPTING) when scripting is on, so the
+# headers/lib reach us transitively — but name it explicitly and gated, to
+# match how src/ links Lua and to stay correct if that interface ever narrows.
+# With scripting OFF, completions still work (static tables); only diagnostics
+# are #if'd out.
+if(LIMINAL_WITH_SCRIPTING AND TARGET lua_static)
+    target_link_libraries(liminal-editor PRIVATE lua_static)
+endif()
 
 # Bakes the sample project location in so `./liminal-editor` with no args
 # opens something immediately. Overridable; only baked when the file actually

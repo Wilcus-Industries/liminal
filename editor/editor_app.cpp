@@ -75,6 +75,10 @@ EditorApp::EditorApp(std::string projectFile)
     }
 #endif
 
+    // Script editor pane logs through our console (decoupled via the sink).
+    m_scriptEditor = std::make_unique<ScriptEditorPanel>(
+        [this](const std::string& line) { log(line); });
+
     registerBuiltinComponents();
     m_gizmoOp = ImGuizmo::TRANSLATE;
     log("[editor] liminal editor started");
@@ -184,6 +188,11 @@ void EditorApp::drawUi() {
     drawViewport();
     drawAssetBrowser();
     drawConsole();
+    drawScriptEditor();
+}
+
+void EditorApp::drawScriptEditor() {
+    if (m_scriptEditor) m_scriptEditor->draw(m_dt);
 }
 
 void EditorApp::buildDefaultLayout(unsigned int dockspaceId) {
@@ -204,6 +213,8 @@ void EditorApp::buildDefaultLayout(unsigned int dockspaceId) {
     ImGui::DockBuilderDockWindow("Asset Browser", bottom);
     ImGui::DockBuilderDockWindow("Console", bottom);
     ImGui::DockBuilderDockWindow("Viewport", center);
+    // Script Editor shares the center node, tabbed behind the Viewport.
+    ImGui::DockBuilderDockWindow("Script Editor", center);
     ImGui::DockBuilderFinish(dockId);
 }
 
@@ -241,6 +252,23 @@ void EditorApp::drawMenuBar() {
                                                 : m_scenePath.c_str(),
                             m_mode == Mode::Play ? "  [PLAY]" : "");
         ImGui::EndMenuBar();
+    }
+
+    // Global Cmd/Ctrl+S: the Script Editor saves its active tab while its
+    // window is focused (it handles the chord itself); everywhere else the
+    // chord saves the scene. WantTextInput is excluded so typing a path into
+    // a modal can't trigger a stale-path scene save.
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        const bool mod = io.KeySuper || io.KeyCtrl;
+        const bool scriptFocused = m_scriptEditor && m_scriptEditor->focused();
+        if (mod && ImGui::IsKeyPressed(ImGuiKey_S, false) && !scriptFocused &&
+            !io.WantTextInput) {
+            if (m_scenePath.empty())
+                wantSaveAs = true;
+            else
+                saveScene(m_scenePath);
+        }
     }
 
     // Modals (single-instance editor: function-local request -> popup).
@@ -609,14 +637,23 @@ void EditorApp::drawAssetBrowser() {
             }
             return;
         }
-        if (ImGui::Selectable(e.name.c_str())) {
-            const fs::path p(e.path);
+        const fs::path p(e.path);
+        const bool isLua = p.extension() == ".lua";
+        if (ImGui::Selectable(e.name.c_str(), false,
+                              ImGuiSelectableFlags_AllowDoubleClick)) {
+            const bool dbl = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
             if (p.extension() == ".lscene") {
                 openScene(e.path);
-            } else if (p.extension() == ".lua") {
-                m_browserStatus = "script: " + e.path;
-                log("[editor] script selected: " + e.path +
-                    " (assign via a Script component's path field)");
+            } else if (isLua) {
+                if (dbl && m_scriptEditor) {
+                    m_scriptEditor->open(e.path); // opens + focuses the pane
+                    ImGui::SetWindowFocus("Script Editor");
+                } else {
+                    m_browserStatus = "script: " + e.path +
+                                      " (double-click to edit)";
+                    log("[editor] script selected: " + e.path +
+                        " (double-click opens it in the Script Editor)");
+                }
             } else {
                 m_browserStatus = e.path;
             }

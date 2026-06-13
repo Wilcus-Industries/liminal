@@ -145,6 +145,23 @@ if(LIMINAL_BUILD_EDITOR)
         SOURCE_SUBDIR  cmake-skip-upstream-build)
     FetchContent_MakeAvailable(imguizmo)
 
+    # ImGuiColorTextEdit — sources only; compiled into liminal-editor (same
+    # treatment as ImGuizmo). We pin BalazsJako's original at a recent master
+    # commit rather than the goossens fork: goossens is a full rewrite whose
+    # API drops SetErrorMarkers / IsTextChanged / SetHandleKeyboardInputs /
+    # GetCursorPosition+mCharAdvance — the exact surface the Script Editor pane
+    # (diagnostics, completion popup key-stealing, cursor-anchored popup) is
+    # built on. The pinned BalazsJako head already uses the modern ImGuiKey_*
+    # API and compiles clean against imgui v1.92.8-docking (verified). No
+    # GIT_SHALLOW with a raw SHA (see the ImGuizmo note above); upstream's
+    # CMakeLists wants a preinstalled imgui, so the bogus SOURCE_SUBDIR skips
+    # add_subdirectory and liminal-editor builds TextEditor.cpp itself.
+    FetchContent_Declare(imguicolortextedit
+        GIT_REPOSITORY https://github.com/BalazsJako/ImGuiColorTextEdit
+        GIT_TAG        ca2f9f1462e3b60e56351bc466acda448c5ea50d
+        SOURCE_SUBDIR  cmake-skip-upstream-build)
+    FetchContent_MakeAvailable(imguicolortextedit)
+
     # JetBrains Mono for the editor UI font. Plain zip of TTFs (no CMake), so
     # we Populate-and-point like stb/glad — the editor bakes the absolute path
     # to the Regular face and loads it at startup.

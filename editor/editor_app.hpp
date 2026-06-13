@@ -29,6 +29,8 @@
 #include <liminal/script/script_host.hpp>
 #endif
 
+#include "script_editor.hpp"
+
 namespace liminal::editor {
 
 class EditorApp {
@@ -52,6 +54,7 @@ private:
     void drawViewport();
     void drawAssetBrowser();
     void drawConsole();
+    void drawScriptEditor();
     void buildDefaultLayout(unsigned int dockspaceId);
 
     // --- viewport helpers ---
@@ -82,6 +85,9 @@ private:
     std::unique_ptr<ScriptHost> m_scripts; // alive only while playing
 #endif
     Scene m_scene;
+
+    // --- script editor pane (own TextEditor tabs; logs via our console) ---
+    std::unique_ptr<ScriptEditorPanel> m_scriptEditor;
 
     // --- project ---
     std::string m_projectFile; // absolute path of project.ljson, "" = none
