@@ -23,6 +23,8 @@
 
 #include <liminal/render/texture.hpp>
 
+#include "hash_detail.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -48,14 +50,7 @@ namespace {
 // Cheap integer avalanche hash (lowbias32 variant). Deterministic across
 // runs/platforms, which matters: the same dream seed must hallucinate the
 // same noise texture every time it recurs.
-std::uint32_t hashU32(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
+using render_detail::hashU32;
 
 // Hash of a (x, y, seed) triple folded to [0, 1).
 float hash01(std::uint32_t x, std::uint32_t y, std::uint32_t seed) {

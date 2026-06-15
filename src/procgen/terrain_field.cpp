@@ -9,6 +9,8 @@
 
 #include <liminal/procgen/terrain.hpp>
 
+#include "noise_detail.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -19,41 +21,14 @@ namespace liminal::procgen {
 
 namespace {
 
-std::uint32_t hashU32(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
-
-float hash01(std::uint32_t seed, int ix, int iz) {
-    std::uint32_t h = hashU32(static_cast<std::uint32_t>(ix) * 0x9E3779B9U ^
-                              hashU32(static_cast<std::uint32_t>(iz) * 0x85EBCA6BU ^ seed));
-    return static_cast<float>(h & 0x00FFFFFFU) / 16777216.0f;
-}
-
-// Value noise on integer lattice `freq` cells wide, smooth-interpolated.
-float valueNoise(std::uint32_t seed, float x, float z, float freq) {
-    float fx = x * freq, fz = z * freq;
-    int ix = static_cast<int>(std::floor(fx)), iz = static_cast<int>(std::floor(fz));
-    float tx = fx - ix, tz = fz - iz;
-    tx = tx * tx * (3.0f - 2.0f * tx);
-    tz = tz * tz * (3.0f - 2.0f * tz);
-    float a = hash01(seed, ix, iz),     b = hash01(seed, ix + 1, iz);
-    float c = hash01(seed, ix, iz + 1), d = hash01(seed, ix + 1, iz + 1);
-    return (a + (b - a) * tx) * (1.0f - tz) + (c + (d - c) * tx) * tz;
-}
+using detail::hash01;
+using detail::hashU32;
+using detail::smoothstep01;
+using detail::valueNoise;
 
 float fbm(std::uint32_t seed, float x, float z, float freq) {
     return valueNoise(seed, x, z, freq) * 0.65f +
            valueNoise(seed ^ 0x5bd1e995U, x, z, freq * 2.7f) * 0.35f;
-}
-
-float smoothstep01(float t) {
-    t = std::clamp(t, 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
 }
 
 // 0 beyond rFade, 1 inside rFlat.

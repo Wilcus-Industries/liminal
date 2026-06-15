@@ -11,6 +11,8 @@
 
 #include <liminal/procgen/structure.hpp>
 
+#include "noise_detail.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -48,14 +50,7 @@ void box(Built& out, const glm::vec3& mn, const glm::vec3& mx, bool walkable = f
     out.boxes.push_back(PartBox{mn, mx, walkable});
 }
 
-std::uint32_t hashU32(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
+using detail::hashU32;
 
 float hash01(unsigned int seed, unsigned int i) {
     return static_cast<float>(hashU32(i * 0x9E3779B9U ^ hashU32(seed)) & 0xFFFFFFU) / 16777216.0f;
