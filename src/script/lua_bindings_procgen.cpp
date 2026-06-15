@@ -28,8 +28,6 @@
 #include <liminal/render/mesh.hpp>
 
 #include <cstdint>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -93,9 +91,8 @@ pg::TerrainParams::Water waterOf(const std::string& s,
     return def;
 }
 
-// Read the TileSet JSON overlay through Assets::resolve + std::ifstream into a
-// temp file path TileSet::fromJsonFile can open (fromJsonFile takes a path, so
-// we just resolve and forward it). std::filesystem only, cross-platform.
+// Resolve the TileSet JSON overlay path through Assets::resolve and forward it
+// to TileSet::fromJsonFile (which opens the path itself).
 pg::TileSet loadTileSet(sol::optional<std::string> jsonPath) {
     const pg::TileSet base = pg::defaultTileSet();
     if (!jsonPath || jsonPath->empty()) return base;

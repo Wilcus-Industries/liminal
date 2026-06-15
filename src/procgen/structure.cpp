@@ -74,7 +74,7 @@ void wallWithDoor(Built& out, float x0, float x1, float z0, float z1,
 
 } // namespace
 
-Built building(float size, int height, unsigned int seed) {
+Built building(float size, int height, unsigned int /*seed*/) {
     Built out;
     const float hw = 2.4f + size * 1.3f;             // half width (door wall on +z)
     const float hd = (2.0f + size * 1.1f);           // half depth
@@ -93,7 +93,7 @@ Built building(float size, int height, unsigned int seed) {
     return out;
 }
 
-Built barn(float size, int height, unsigned int seed) {
+Built barn(float size, int height, unsigned int /*seed*/) {
     Built out;
     const float hw = 2.6f + size * 1.2f;   // gable ends face +/- z
     const float hd = 3.2f + size * 1.5f;
@@ -122,7 +122,7 @@ Built barn(float size, int height, unsigned int seed) {
     return out;
 }
 
-Built tower(float size, int height, unsigned int seed) {
+Built tower(float size, int height, unsigned int /*seed*/) {
     Built out;
     const int tiers = std::clamp(2 + height / 2, 2, 6);
     const float tierH = 2.0f + height * 0.35f;
@@ -160,7 +160,7 @@ Built wallRun(float size, int height, unsigned int seed) {
     return out;
 }
 
-Built bigArch(float size, int height, unsigned int seed) {
+Built bigArch(float size, int height, unsigned int /*seed*/) {
     Built out;
     const float halfSpan = 1.8f + size * 1.0f;
     const float h = 3.0f + height * 0.7f;
@@ -171,7 +171,7 @@ Built bigArch(float size, int height, unsigned int seed) {
     return out;
 }
 
-Built grandStairs(float size, int height, unsigned int seed) {
+Built grandStairs(float size, int height, unsigned int /*seed*/) {
     Built out;
     const float rise = 0.42f; // < player step-up (0.5) so every step mounts
     const float run = 0.95f;
@@ -259,7 +259,7 @@ Built bridge(const glm::vec3& a, const glm::vec3& b, float size,
 }
 
 Built pier(const glm::vec3& start, const glm::vec2& dir, float size,
-           const HeightFn& ground, unsigned int seed) {
+           const HeightFn& ground, unsigned int /*seed*/) {
     Built out;
     const float halfW = 0.9f + size * 0.35f;
     const float len = 9.0f + size * 5.0f;

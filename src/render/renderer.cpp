@@ -415,8 +415,6 @@ void Renderer::beginFrame(const glm::mat4& view, int windowFbWidth,
     scene.set("uSnapRes",
               glm::vec2((float)settings.virtualW,
                         (float)settings.virtualH) * settings.snapScale);
-
-    m_view = view;
 }
 
 void Renderer::draw(const DrawItem& item) {

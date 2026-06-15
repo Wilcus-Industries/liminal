@@ -412,7 +412,6 @@ Mesh Mesh::form(int sides, float twist, float taper, unsigned int seed) {
     taper = std::clamp(taper, 0.0f, 1.0f);
     twist = std::clamp(twist, 0.0f, 0.9f);
 
-    const float kTau = 6.28318530717958647692f;
     const float baseR = 0.5f;             // bottom-ring radius
     const float topR = baseR * taper;     // 0 -> apex (cone)
     const float height = 1.6f;            // before the object's own scale

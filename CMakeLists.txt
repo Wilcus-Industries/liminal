@@ -105,7 +105,6 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 # liminal: the engine static library.
 # ---------------------------------------------------------------------------
 add_library(liminal STATIC
-    src/version.cpp
     src/core/app.cpp
     src/core/asset_cache.cpp
     src/core/assets.cpp

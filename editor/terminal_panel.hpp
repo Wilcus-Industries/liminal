@@ -107,8 +107,6 @@ private:
     std::deque<ScrollLine> m_scrollback; // newest at back; capped
     int m_scrollOffset = 0;              // lines scrolled up from the live view
 
-    bool m_focusedLastFrame = false;
-
     // --- mouse text selection (visible-screen cell coords, row 0 = top) ---
     bool m_selecting = false; // drag in progress
     bool m_hasSel = false;    // a committed/active selection exists

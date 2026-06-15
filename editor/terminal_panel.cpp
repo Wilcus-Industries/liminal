@@ -564,7 +564,6 @@ void TerminalPanel::draw() {
         ImGui::SetNextFrameWantCaptureKeyboard(true);
         handleInput();
     }
-    m_focusedLastFrame = focused;
 
     if (m_exited && !m_status.empty()) {
         ImGui::Separator();

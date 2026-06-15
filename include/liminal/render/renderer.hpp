@@ -153,8 +153,6 @@ private:
 
     unsigned int m_fsVao = 0; // fullscreen triangle
     unsigned int m_fsVbo = 0;
-
-    glm::mat4 m_view{1.0f};
 };
 
 // Process-global list of selectable shader pack names. The renderer does not
