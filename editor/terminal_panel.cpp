@@ -201,13 +201,24 @@ void TerminalPanel::ensureSize(int cols, int rows) {
 // so a reading-order span is pulled per-row: each row's [c0,c1) (c0 = startCol
 // on the first row else 0; c1 = endCol+1 on the last row else cols), trailing
 // spaces trimmed, rows joined with "\n".
+void TerminalPanel::selectionSpan(int& sr, int& sc, int& er, int& ec) const {
+    sr = m_selAnchorRow;
+    sc = m_selAnchorCol;
+    er = m_selEndRow;
+    ec = m_selEndCol;
+    if (sr > er || (sr == er && sc > ec)) {
+        std::swap(sr, er);
+        std::swap(sc, ec);
+    }
+}
+
 std::string TerminalPanel::selectedText() const {
     if (!m_hasSel || !m_vt) return {};
     VTermScreen* screen = vterm_obtain_screen(m_vt);
     if (!screen) return {};
 
-    int sr = m_selAnchorRow, sc = m_selAnchorCol, er = m_selEndRow, ec = m_selEndCol;
-    if (sr > er || (sr == er && sc > ec)) { std::swap(sr, er); std::swap(sc, ec); }
+    int sr, sc, er, ec;
+    selectionSpan(sr, sc, er, ec);
 
     std::string out;
     std::vector<char> buf;
@@ -350,8 +361,8 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
     // Selection: LINEAR (reading-order) span like a real terminal. Normalize
     // anchor/end to (sr,sc) <= (er,ec); a visible cell (row,col) is selected if
     // it falls between those two points in reading order (full lines in between).
-    int sr = m_selAnchorRow, sc = m_selAnchorCol, er = m_selEndRow, ec = m_selEndCol;
-    if (sr > er || (sr == er && sc > ec)) { std::swap(sr, er); std::swap(sc, ec); }
+    int sr, sc, er, ec;
+    selectionSpan(sr, sc, er, ec);
     auto cellSelected = [&](int row, int col) {
         if (!m_hasSel) return false;
         if (row < sr || row > er) return false;

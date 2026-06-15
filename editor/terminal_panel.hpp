@@ -78,6 +78,9 @@ private:
     // scrollback excluded). Reading-order span, rows joined with "\n".
     std::string selectedText() const;
 
+    // Selection anchor/end normalized to reading order so (sr,sc) <= (er,ec).
+    void selectionSpan(int& sr, int& sc, int& er, int& ec) const;
+
     // libvterm screen scrollback callbacks (static thunks -> members).
     static int sbPushThunk(int cols, const VTermScreenCell* cells, void* user);
     static int sbPopThunk(int cols, VTermScreenCell* cells, void* user);

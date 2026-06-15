@@ -559,6 +559,21 @@ void ScriptEditorPanel::drawDoc(Doc& doc, float dt) {
     }
 }
 
+// Insert the part of a completion item that extends past the already-typed
+// prefix (the whole item on a case-mismatch). Shared by the keyboard-accept
+// and mouse-click-accept paths of drawCompletionPopup.
+static void insertCompletionRemainder(TextEditor* editor,
+                                      const std::string& insert,
+                                      const std::string& prefix) {
+    std::string remainder;
+    if (insert.size() >= prefix.size() &&
+        insert.compare(0, prefix.size(), prefix) == 0)
+        remainder = insert.substr(prefix.size());
+    else
+        remainder = insert; // case mismatch: insert whole (rare)
+    if (!remainder.empty()) editor->InsertText(remainder);
+}
+
 void ScriptEditorPanel::drawCompletionPopup(Doc& doc) {
     // Current line text up to the cursor → context for the completion engine.
     const TextEditor::Coordinates cur = doc.editor->GetCursorPosition();
@@ -617,15 +632,8 @@ void ScriptEditorPanel::drawCompletionPopup(Doc& doc) {
     (void)io;
 
     if (accept) {
-        // Insert only the remainder of the chosen item past the typed prefix.
         const CompletionItem& it = items[size_t(m_popupSel)];
-        std::string remainder;
-        if (it.insert.size() >= m_popupPrefix.size() &&
-            it.insert.compare(0, m_popupPrefix.size(), m_popupPrefix) == 0)
-            remainder = it.insert.substr(m_popupPrefix.size());
-        else
-            remainder = it.insert; // case mismatch: insert whole (rare)
-        if (!remainder.empty()) doc.editor->InsertText(remainder);
+        insertCompletionRemainder(doc.editor.get(), it.insert, m_popupPrefix);
         dismissPopup();
         return;
     }
@@ -661,13 +669,8 @@ void ScriptEditorPanel::drawCompletionPopup(Doc& doc) {
             if (ImGui::Selectable(it.label.c_str(), sel)) {
                 m_popupSel = i;
                 // mouse-click accept on next frame is awkward; accept inline.
-                std::string remainder;
-                if (it.insert.size() >= m_popupPrefix.size() &&
-                    it.insert.compare(0, m_popupPrefix.size(), m_popupPrefix) == 0)
-                    remainder = it.insert.substr(m_popupPrefix.size());
-                else
-                    remainder = it.insert;
-                if (!remainder.empty()) doc.editor->InsertText(remainder);
+                insertCompletionRemainder(doc.editor.get(), it.insert,
+                                          m_popupPrefix);
                 dismissPopup();
             }
             if (!it.detail.empty()) {

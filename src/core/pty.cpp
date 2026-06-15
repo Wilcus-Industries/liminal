@@ -77,15 +77,23 @@ Pty& Pty::operator=(Pty&& other) noexcept {
     return *this;
 }
 
+// winsize from a requested cols/rows, falling back to the conventional 80x24
+// when either is non-positive.
+static struct winsize makeWinsize(int cols, int rows) {
+    constexpr int kDefaultCols = 80, kDefaultRows = 24;
+    struct winsize ws{};
+    ws.ws_col = static_cast<unsigned short>(cols > 0 ? cols : kDefaultCols);
+    ws.ws_row = static_cast<unsigned short>(rows > 0 ? rows : kDefaultRows);
+    return ws;
+}
+
 bool Pty::spawn(const std::string& cmd, const std::vector<std::string>& args,
                 int cols, int rows, const std::string& cwd) {
     if (valid()) return false; // already running
 
     // Seed the slave with the requested window size so the child's first
     // ioctl(TIOCGWINSZ) (and any TUI that reads it at startup) sees the truth.
-    struct winsize ws{};
-    ws.ws_col = static_cast<unsigned short>(cols > 0 ? cols : 80);
-    ws.ws_row = static_cast<unsigned short>(rows > 0 ? rows : 24);
+    struct winsize ws = makeWinsize(cols, rows);
 
     int master = -1;
     const pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
@@ -164,9 +172,7 @@ bool Pty::write(const unsigned char* bytes, size_t n) {
 
 void Pty::resize(int cols, int rows) {
     if (m_master < 0) return;
-    struct winsize ws{};
-    ws.ws_col = static_cast<unsigned short>(cols > 0 ? cols : 80);
-    ws.ws_row = static_cast<unsigned short>(rows > 0 ? rows : 24);
+    struct winsize ws = makeWinsize(cols, rows);
     ::ioctl(m_master, TIOCSWINSZ, &ws);
 }
 

@@ -3,19 +3,17 @@
 #include <filesystem>
 
 #include <cstdlib>
+#include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <shellapi.h>
 #include <windows.h>
-#include <vector>
 #elif defined(__APPLE__)
 #include <climits> // PATH_MAX
 #include <mach-o/dyld.h>
-#include <vector>
 #else
 #include <unistd.h>
-#include <vector>
 #endif
 
 namespace liminal {
