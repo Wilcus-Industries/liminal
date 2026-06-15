@@ -223,19 +223,25 @@ Renderer::Renderer(const ShaderPack& pack) {
 
 void Renderer::registerShaderPack(const std::string& name, ShaderPack pack) {
     const bool wasActive = (name == m_activeName) && m_active;
-    m_packSrc[name] = std::move(pack);
-
-    // Drop any stale compiled program so it recompiles on next use.
-    m_active = wasActive ? nullptr : m_active; // dangling ptr if we erase below
-    m_compiled.erase(name);
 
     if (wasActive) {
         // Active pack changed under us (hot reload): recompile now so the edit
-        // takes effect this frame. Propagate failure (ctor/explicit callers
-        // expect a throw; the recompile of a previously-good pack is rare).
-        auto it = m_compiled.emplace(name, compilePack(m_packSrc[name])).first;
+        // takes effect this frame. Compile the NEW source into a local FIRST so
+        // a compile/link throw leaves the previously-active program (m_active,
+        // m_compiled, m_packSrc) fully intact — callers that catch the throw
+        // can keep rendering the old pack. Only commit on success.
+        auto compiled = compilePack(pack); // throws here mutate nothing below
+        m_packSrc[name] = std::move(pack);
+        auto it = m_compiled.insert_or_assign(name, std::move(compiled)).first;
         m_active = it->second.get();
+        return;
     }
+
+    // Not the active pack: store the source and drop any stale compiled program
+    // so it lazily recompiles on next use. m_active points at a different pack's
+    // node, so erasing this name's entry never dangles it.
+    m_packSrc[name] = std::move(pack);
+    m_compiled.erase(name);
 }
 
 bool Renderer::useShaderPack(const std::string& name) {
