@@ -288,6 +288,9 @@ void bindAudio(sol::table& lm, sol::state& lua, ScriptHost& host) {
         Audio* a = host.context().audio;
         if (!a) {
             warnOnce("lm.audio.get: no audio subsystem (returns 0)");
+            // Match the with-subsystem path's Lua type: int-typed names return
+            // an integer 0, everything else a double 0.0.
+            if (audioInts().count(name)) return sol::make_object(s, 0);
             return sol::make_object(s, 0.0);
         }
         AudioParams& p = a->params;

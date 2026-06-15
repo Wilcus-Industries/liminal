@@ -114,14 +114,16 @@ public:
     // preserving the virtual aspect ratio (letterboxed if needed).
     void endFrame(int windowFbWidth, int windowFbHeight);
 
-    // Editor/tooling access: the GL texture name of the low-res color
-    // attachment the scene pass renders into. Valid after construction;
-    // contents are the last frame drawn between beginFrame()/endFrame().
-    // Reallocated (same purpose, possibly new name) when virtualW/H change.
+    // Editor/tooling access: the GL texture name of the color attachment the
+    // scene pass renders into (window resolution for native packs, the virtual
+    // FBO for retro). Valid after construction; contents are the last frame
+    // drawn between beginFrame()/endFrame(). Reallocated (same purpose,
+    // possibly new name) when the resolved render size changes.
     unsigned int colorTexture() const { return m_colorTex; }
 
-    // Reads the current low-res color FBO into rgba (size = w*h*4, RGBA8,
-    // bottom-up). If there is no allocated FBO, sets w=h=0 and clears rgba.
+    // Reads the current color FBO into rgba (size = w*h*4, RGBA8, bottom-up;
+    // window resolution for native packs, the virtual FBO for retro). If there
+    // is no allocated FBO, sets w=h=0 and clears rgba.
     void readPixels(std::vector<unsigned char>& rgba, int& w, int& h) const;
 
     // A registered pack's compiled programs plus the resolution it renders at.

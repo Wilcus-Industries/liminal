@@ -29,9 +29,8 @@ namespace {
 // Scrollback cap (lines). A ring: oldest dropped past this.
 constexpr size_t kScrollbackMax = 5000;
 
-// xterm's default RGB for the 16 ANSI colors, used only as a last-resort
-// palette before libvterm resolves its own (it normally does so itself via
-// convert_color_to_rgb; this is dead-simple defensive packing).
+// Pack r,g,b into an opaque ImU32 (alpha 255). Colors arrive already resolved
+// to RGB by vterm_screen_convert_color_to_rgb; this is just the final pack.
 inline ImU32 packRGB(uint8_t r, uint8_t g, uint8_t b) {
     return IM_COL32(r, g, b, 255);
 }
@@ -213,9 +212,8 @@ void TerminalPanel::selectionSpan(int& sr, int& sc, int& er, int& ec) const {
 }
 
 std::string TerminalPanel::selectedText() const {
-    if (!m_hasSel || !m_vt) return {};
-    VTermScreen* screen = vterm_obtain_screen(m_vt);
-    if (!screen) return {};
+    if (!m_hasSel || !m_vt || !m_screen) return {};
+    VTermScreen* screen = m_screen; // cached in lockstep with m_vt (startSession)
 
     int sr, sc, er, ec;
     selectionSpan(sr, sc, er, ec);

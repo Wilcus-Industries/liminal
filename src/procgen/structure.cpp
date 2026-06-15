@@ -52,7 +52,9 @@ void box(Built& out, const glm::vec3& mn, const glm::vec3& mx, bool walkable = f
 
 using detail::hashU32;
 
-float hash01(unsigned int seed, unsigned int i) {
+// 1D index hash → [0,1). Named distinctly from terrain's 2D lattice hash01 to
+// avoid confusing two different-arity helpers that share the noise family.
+float hash1D(unsigned int seed, unsigned int i) {
     return static_cast<float>(hashU32(i * 0x9E3779B9U ^ hashU32(seed)) & 0xFFFFFFU) / 16777216.0f;
 }
 
@@ -147,7 +149,7 @@ Built wallRun(float size, int height, unsigned int seed) {
     const float h = 1.9f + height * 0.5f;
     const float t = 0.5f;
     // Gap position varies with seed so a row of walls doesn't read as copies.
-    const float gapAt = (hash01(seed, 1) - 0.5f) * halfLen;
+    const float gapAt = (hash1D(seed, 1) - 0.5f) * halfLen;
     const float g0 = gapAt - 0.95f, g1 = gapAt + 0.95f;
     box(out, {-halfLen, 0.0f, -t * 0.5f}, {g0, h, t * 0.5f});
     box(out, {g1, 0.0f, -t * 0.5f}, {halfLen, h, t * 0.5f});
@@ -211,7 +213,7 @@ Built bridge(const glm::vec3& a, const glm::vec3& b, float size,
     };
 
     const int total = 2 * n;
-    const int keep = severed ? std::max(2, static_cast<int>(total * (0.45f + hash01(seed, 3) * 0.2f)))
+    const int keep = severed ? std::max(2, static_cast<int>(total * (0.45f + hash1D(seed, 3) * 0.2f)))
                              : total;
     float px = a.x, pz = a.z;
     int placed = 0;

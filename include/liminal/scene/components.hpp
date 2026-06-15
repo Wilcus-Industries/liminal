@@ -56,7 +56,7 @@ struct Camera {
     float farZ = 220.0f;
     bool primary = true;
     // Selectable shader pack name (see liminal::shaderCatalog()). "native" is
-    // the built-in PS1 look.
+    // the default crisp, perspective-correct pack; "retro" is the PS1 look.
     std::string shaderName = "native";
 };
 
