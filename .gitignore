@@ -14,3 +14,7 @@ compile_commands.json
 
 # Runtime scratch (examples write this in cwd)
 imgui.ini
+
+# Local-only LLM model weights (multi-GB, never tracked)
+*.gguf
+editor/sample_project/models/

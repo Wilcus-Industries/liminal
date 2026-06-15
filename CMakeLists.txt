@@ -31,6 +31,24 @@ message(STATUS "liminal: targeting OpenGL ${LIMINAL_GL_MAJOR}.${LIMINAL_GL_MINOR
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Dependencies.cmake)
 
+# Short git commit baked into the version header (shown on the editor landing
+# screen). Best-effort: a tarball/export checkout with no .git falls back to
+# "unknown". Note this resolves at CONFIGURE time, so a rebuild after new commits
+# without re-running CMake keeps the old hash — acceptable for a UI label.
+find_package(Git QUIET)
+set(LIMINAL_GIT_COMMIT "unknown")
+if(Git_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE LIMINAL_GIT_COMMIT_OUT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(LIMINAL_GIT_COMMIT_OUT)
+        set(LIMINAL_GIT_COMMIT "${LIMINAL_GIT_COMMIT_OUT}")
+    endif()
+endif()
+
 # Configured version header → <build>/include/liminal/version.hpp
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/include/liminal/version.hpp.in
@@ -57,14 +75,18 @@ target_link_libraries(liminal_imgui PUBLIC glfw)
 add_library(liminal::imgui ALIAS liminal_imgui)
 
 # ---------------------------------------------------------------------------
-# Default "retro" shader pack, embedded as string literals at configure time
-# so the Renderer's default ctor never touches the filesystem.
+# Built-in shader packs (retro + native), embedded as string literals at
+# configure time so the Renderer's default ctor never touches the filesystem.
+# The blit (upscale) pass is shared by both packs.
 # ---------------------------------------------------------------------------
 set(LIMINAL_RETRO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/retro)
+set(LIMINAL_NATIVE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/native)
 file(READ ${LIMINAL_RETRO_DIR}/dream.vert LIMINAL_RETRO_SCENE_VERT)
 file(READ ${LIMINAL_RETRO_DIR}/dream.frag LIMINAL_RETRO_SCENE_FRAG)
 file(READ ${LIMINAL_RETRO_DIR}/blit.vert  LIMINAL_RETRO_BLIT_VERT)
 file(READ ${LIMINAL_RETRO_DIR}/blit.frag  LIMINAL_RETRO_BLIT_FRAG)
+file(READ ${LIMINAL_NATIVE_DIR}/scene.vert LIMINAL_NATIVE_SCENE_VERT)
+file(READ ${LIMINAL_NATIVE_DIR}/scene.frag LIMINAL_NATIVE_SCENE_FRAG)
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/render/embedded_shaders.hpp.in
     ${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.hpp
@@ -75,7 +97,9 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     ${LIMINAL_RETRO_DIR}/dream.vert
     ${LIMINAL_RETRO_DIR}/dream.frag
     ${LIMINAL_RETRO_DIR}/blit.vert
-    ${LIMINAL_RETRO_DIR}/blit.frag)
+    ${LIMINAL_RETRO_DIR}/blit.frag
+    ${LIMINAL_NATIVE_DIR}/scene.vert
+    ${LIMINAL_NATIVE_DIR}/scene.frag)
 
 # ---------------------------------------------------------------------------
 # liminal: the engine static library.

@@ -1,0 +1,381 @@
+---
+name: liminal-lua
+description: How to write Lua gameplay scripts for the liminal engine via the `lm` global — scene queries, input, time, audio, procgen, AI, and the entity script lifecycle. Use when creating or editing .lua files in a liminal project.
+---
+
+# liminal Lua scripting
+
+liminal runs Lua 5.4 (via sol2). Each entity that has a `Script` component
+points at a `.lua` file. The file is loaded in a fresh per-entity environment
+and **must return a table** with optional `on_start` / `on_update` callbacks.
+The `lm` global is the entire engine API surface.
+
+## Script file shape (lifecycle)
+
+A script returns a behavior table. The host calls:
+
+- `on_start(self)` — once, the first frame the entity's script is live (and
+  again after a hot reload). `self` is the owning `Entity`.
+- `on_update(self, dt)` — every frame. `self` is the owning `Entity`, `dt` is
+  the frame delta in **seconds** (a number passed by the engine — there is no
+  `lm.time.dt`).
+
+Anything else returned in the table is ignored by the engine but usable as your
+own state/helpers. Locals declared at file scope are per-entity (fresh
+environment per instance), so module-level config is fine.
+
+```lua
+local M = {}
+
+function M.on_start(self)
+    lm.log("hello from " .. self.name)
+end
+
+function M.on_update(self, dt)
+    -- gameplay here
+end
+
+return M
+```
+
+Returning anything other than a table is an error. `on_start` / `on_update`
+are both optional, but a script with neither does nothing.
+
+**Hot reload:** in the editor (Play mode) the file is watched (~0.5s); saving
+re-inits all instances of that script (`on_start` runs again). The shipped
+player has hot reload off.
+
+**Error handling:** every callback is pcall'd. Errors are logged once
+(deduplicated) and the script keeps running next frame; fixing the file and
+saving re-reports if it still errors.
+
+## The Entity handle
+
+`Entity` is a lightweight value handle (copyable). Methods:
+
+- `self.name` — read/write the `Name` component (string property). Writing adds
+  a `Name` if missing.
+- `self:valid()` — is the entity still alive.
+- `self:destroy()` — destroy this entity.
+- `self:get_transform()` — returns the `Transform` (auto-adds one if missing, so
+  this never returns nil on a valid entity).
+- `self:get_mesh_renderer()` — returns the `MeshRenderer` or **nil** if absent
+  (renderers are never auto-added; always nil-check).
+- `self:get_component("Name")` — generic accessor for any registered component
+  by name; returns the component or nil.
+
+**Frame-local pointer caveat (important):** components returned by
+`get_transform` / `get_mesh_renderer` / `get_component` are raw pointers into
+the entt registry. They are valid only for the current frame and become
+dangling after any structural change (add/remove component, create/destroy
+entity). **Never cache a component across frames** — re-fetch it each
+`on_update`.
+
+## Components and their Lua fields
+
+Fetch via the accessors above. Field names:
+
+- **Name**: `.value` (string).
+- **Transform**: `.position`, `.rotation`, `.scale` (all `vec3`; rotation is in
+  **degrees**). Also `t:set_position(x,y,z)`, `t:set_rotation(x,y,z)`,
+  `t:set_scale(x,y,z)`. Mutating `t.position.y = 2` mutates the real component
+  (vecs return by reference).
+  - **Euler order gotcha:** rotation is applied yaw→pitch→roll = **Y → X → Z**
+    (`rotation.y` is yaw, `.x` is pitch, `.z` is roll). Spinning an object
+    "around vertical" means changing `rotation.y`.
+- **MeshRenderer**: `.mesh` (asset string), `.texture` (asset string),
+  `.color` (`vec4`). Also `mr:set_color(r,g,b)` or `mr:set_color(r,g,b,a)`.
+  Mesh names: `builtin:box|pyramid|pillar|arch|stair|plane|quad`, seeded
+  primitives like `builtin:blob:42` / `builtin:tree:7` / `builtin:rock:3` /
+  `builtin:crystal:5`, or a `runtime:` key from `lm.assets.add_mesh`.
+
+- **Camera**: `.fov`, `.near`, `.far` (numbers), `.primary` (bool), `.shader`
+  (string — the shader pack name; see the Shaders section). Fetch via
+  `self:get_component("Camera")` (nil if absent).
+
+`AudioSource`, `Light`, `Script` are registered components but expose no Lua
+usertype fields beyond `get_component` returning nil/an opaque handle — drive
+audio/AI through the `lm.*` namespaces below.
+
+## Math types
+
+- `vec3(x,y,z)` (or `vec3()`, `vec3(s)`) — fields `.x .y .z`, supports `+ - *`
+  (scalar), unary `-`, `:length()`, `tostring`.
+- `vec4(x,y,z,w)` — fields `.x .y .z .w`.
+- Available as `lm.vec3` / `lm.vec4` as well as bare `vec3` / `vec4`.
+- Lua stdlib `math`, `string`, `table`, and a sandboxed `os` (time/clock/date
+  only — no `os.execute/exit/getenv/...`) are open. `io` is not available.
+
+## `lm` API reference
+
+### lm.log(msg)
+Print to the engine console. `lm.log("text")`.
+
+### lm.scene
+- `lm.scene.find(name)` → first `Entity` with that `Name`, or nil.
+- `lm.scene.find_all(name)` → array (1-based) of all matching entities.
+- `lm.scene.create(name)` → new `Entity` (gets a `Name`).
+- `lm.scene.each(fn)` → calls `fn(entity)` for every live entity. Iteration is
+  snapshotted, so creating/destroying entities inside `fn` is safe.
+- `lm.scene.destroy(entity)` → destroy an entity.
+- `lm.scene.change(path)` → request a scene swap (player only; a no-op warning
+  in editor Play — the swap is deferred only in the standalone player).
+
+### lm.input
+- `lm.input.key_down(key)` → bool. `key` is a GLFW keycode (number) or a single
+  character string (`"w"`, `"A"` — letters map to their uppercase ASCII code).
+  Always false in windowless/headless hosts.
+- `lm.input.mouse_down(button)` → bool. `button` is a GLFW mouse button
+  (0 = left, 1 = right, 2 = middle).
+- `lm.input.mouse_delta()` → `dx, dy` (two floats), accumulated cursor movement
+  since the last call (zeroed on read). **Only non-zero while the cursor is
+  captured** — call `lm.input.set_cursor_captured(true)` first or you get (0, 0).
+- `lm.input.set_cursor_captured(captured)` — hide + lock the cursor for FPS-style
+  mouse-look (true) or release it (false). Works in both the standalone player and
+  editor Play mode. Typical pattern: capture in `on_start`, toggle with a key (e.g.
+  Tab) so the user can reach UI. On Stop the editor releases the cursor for you.
+- `lm.input.cursor_captured()` → bool, current capture state.
+
+### lm.time
+- `lm.time.now()` → seconds since the host started (monotonic, double).
+- There is **no** `lm.time.dt` — use the `dt` argument to `on_update`.
+
+### lm.audio
+The engine has one procedural DSP voice bank (not positional sources). The game
+thread only pokes atomics; these calls are safe.
+- `lm.audio.set(name, value)` — set a parameter. Float names: `gain`, `decay`,
+  `dread`, `breath`, `lamp_hum`, `zone_blend`, `ambient_gain`, `water_gain`,
+  `throb_level`, `breath_level`, `step_level`, `water_level`, `dropout_min`,
+  `dropout_max`, `interval_min`, `interval_max`. Int names: `zone_a`, `zone_b`,
+  `water_tag`. Bool: `enabled`. Unknown names warn once and no-op.
+- `lm.audio.get(name)` → current value (0 if unknown / no audio).
+- `lm.audio.event(name)` — fire a one-shot. Names: `step`, `jump`, `mumble`,
+  `door_creak`.
+- `lm.audio.ok()` → bool, whether the audio device is running.
+
+### lm.assets
+- `lm.assets.add_mesh(name, meshData)` → returns the resolvable storage key
+  (a `runtime:` string) to put in `MeshRenderer.mesh`. `meshData` is a
+  `MeshData` produced by procgen (e.g. `piece.mesh`, `lm.procgen.terrain_mesh`).
+  **Caveat:** runtime meshes do not survive a scene reload — re-register them in
+  `on_start` if you depend on them.
+
+### lm.ai  (only when built with `LIMINAL_WITH_INFERENCE`)
+Local LLM inference. The table may be absent — feature-test with `if lm.ai then`.
+The engine pointer may also be null (tests / opted-out host): calls warn once and
+return sensible defaults.
+- `lm.ai.start{ model = "path", context = N, threads = N, gpu_layers = N }` —
+  load a model (`model` is required, resolved through Assets).
+- `lm.ai.stop()`.
+- `lm.ai.status()` → `status, message` (status is `"stopped"|"loading"|"ready"|"failed"`).
+- `lm.ai.submit{ system=, user=, grammar=, temperature=, top_p=, top_k=,
+  repeat_penalty=, max_tokens=, seed= }` → request id (integer).
+- `lm.ai.poll(id)` → `{ text=, complete=, failed=, error= }`.
+- `lm.ai.cancel(id)`, `lm.ai.busy()` → bool, `lm.ai.queue_depth()` → int.
+- `lm.ai.forget(id)` — **required** after a completed request. Finished
+  responses are retained until forgotten; a script that never forgets leaks
+  responses for the engine's lifetime.
+
+### lm.procgen
+Deterministic procedural generation. **Hard rule:** every entry point takes an
+explicit seed (or an `Rng`); all randomness flows through these — never use Lua
+`math.random` for world generation, or builds will be non-deterministic.
+
+Primitives:
+- `lm.procgen.rng(seed)` → `Rng` (xorshift32). `rng:next()` (uint32),
+  `rng:next01()` (float 0..1), `rng:range(lo, hi)`.
+- `lm.procgen.tileset(jsonPath?)` → `TileSet` (default set if no path). Methods:
+  `:count()`, `:name(id)`, `:id_of(name)`, `:role_id(role)`, `:walkable(id)`.
+
+Terrain:
+- `lm.procgen.terrain{ seed=, kind=, water=, n=, tile_size= }` → `HeightField`.
+  `kind`: `plane|hills|canyon|islands|flooded|void`. `water`: `none|some|lots`.
+  `HeightField`: `.nodes`, `.cell`, `.half`, `.has_water`, `.water_level`,
+  `:tile_height(x,z)`, `:tile_underwater(x,z)`.
+- `lm.procgen.terrain_mask(hf, params, tileset)` → opaque tile masks (params
+  mirror the `terrain{}` fields).
+- `lm.procgen.terrain_mesh(hf)` / `lm.procgen.water_mesh(hf)` → `MeshData`
+  (hand to `lm.assets.add_mesh`).
+
+WFC layout:
+- `lm.procgen.stamp_footprint(masks, tileset, n, cx, cz, w, d)` → `FootprintPlan`
+  or nil (claims a w×d building footprint).
+- `lm.procgen.solve_wfc{ tileset=, masks=, n=, seed=, max_restarts= }` →
+  `WfcResult` (`.solved`, `.restarts`).
+- `lm.procgen.grid_from(wfcResult, n, tileSize)` → `TileGrid`
+  (`.n`, `.tile_size`, `:in_bounds(x,z)`, `:at(x,z)`, `:set(x,z,id)`,
+  `:center(x,z)` → `worldX, worldZ`).
+- `lm.procgen.validate(grid, hf, sites, plans, tileset)` →
+  `{ repairs=, unreachable_zones=, plans= }`. `sites` is an array of `{x=,z=}`
+  pairs; `plans` an array of `FootprintPlan`. Mutates `grid`; returns
+  door-filled plans. Never fails (always repairs).
+
+Architecture:
+- `lm.procgen.build_building(grid, hf, footprintPlan, familyParams, rng)` →
+  `BuiltPiece`.
+- `lm.procgen.collect_runs(grid, tileset)` → array of `DeckRun`
+  (`.chain_len`, `.is_pier`).
+- `lm.procgen.build_deck(grid, hf, tileset, deckRun)` → `BuiltPiece`.
+- `FootprintPlan{ zone=, style=, x0=, z0=, w=, d=, door_x=, door_z= }`,
+  `FamilyParams{ floor_height=, wall_thickness=, foundation=, min_floors=,
+  max_floors=, roof=, window_*=, door_*=, inset_per_floor=, ruin_chaos=,
+  colonnade=, stairs=, lamp_chance= }` (constructed from a table).
+- `BuiltPiece`: `.mesh` (`MeshData`), `.zone`, `.anchor` (`vec3`),
+  `:vertex_count()`, `:door_count()`, `:lamp_count()`, `:lamps()` (array of vec3).
+
+One-shot:
+- `lm.procgen.town{ seed=, n=, tile_size=, terrain=, water=, tileset=,
+  families= }` → `{ grid=, terrain=, pieces=, repairs=, restarts= }`. Runs the
+  full terrain→mask→WFC→validate→architecture pipeline deterministically.
+  `pieces` is an array of `BuiltPiece`.
+
+## Shaders
+
+The renderer has a named shader-pack registry. Two built-ins are always
+available: **`native`** (the default — clean, perspective-correct, crisp;
+no texture warp) and **`retro`** (the PS1 look — low-res FBO, vertex snap,
+affine UVs, fog). A `Camera` picks its pack by name via its `shaderName`
+field, which shows up as a **dropdown in the Camera component inspector**.
+
+### Authoring custom shaders
+
+Drop GLSL under `<projectDir>/shaders/`. Two layouts, both auto-discovered on
+project open (and **hot-reloaded ~0.5s after you save** — a compile error is
+logged to the console and the previous working shader is kept). Both appear in
+the Camera shader dropdown by name. Custom shaders render at native (window)
+resolution.
+
+**Frag-only — `shaders/<name>.frag`** (name in the dropdown = the file stem).
+This file is a fragment **BODY ONLY**: no `#version`, no `in`/`out`/`uniform`
+declarations. The engine prepends them and supplies the vertex stage. You write
+just `void main(){ ... }`. Available to your body:
+
+```glsl
+in vec3 vNormal;       // world-space normal
+in float vViewDist;    // radial distance from the camera
+in float vGradT;       // 0 at the object's base, 1 at its top
+smooth in vec2 vUV;    // perspective-correct texcoords
+uniform sampler2D uTex;
+uniform vec3 uColor;   // gradient bottom tint
+uniform vec3 uColor2;  // gradient top tint
+uniform vec3 uLightDir;
+uniform float uAlphaTest; // >0.5 = hard cutout where texel alpha < 0.5
+out vec4 FragColor;
+```
+
+Minimal example (`shaders/grayscale.frag`):
+
+```glsl
+// body-only frag shader — engine supplies version/ins/uniforms
+void main() {
+    vec3 c = texture(uTex, vUV).rgb * mix(uColor, uColor2, vGradT);
+    float g = dot(c, vec3(0.299, 0.587, 0.114));
+    float lambert = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
+    FragColor = vec4(vec3(g) * (0.35 + 0.65 * lambert), 1.0);
+}
+```
+
+**Full pack — `shaders/<name>/scene.vert` + `scene.frag`** (name = dir name).
+You own both stages. Vertex attributes are location `0 = pos (vec3)`,
+`1 = normal (vec3)`, `2 = uv (vec2)`. You may read any per-draw uniform the
+renderer sets: `uModel, uView, uProj, uNormalMat, uColor, uColor2, uGradBase,
+uGradInv, uTex, uLightDir` (plus retro-only ones — unused uniforms are
+harmless). The blit/upscale stage is engine-provided.
+
+### Switching a camera's shader at runtime
+
+The `Camera` component is Lua-bound. Get it with `get_component` and set
+`.shader` (also `.fov`, `.near`, `.far`, `.primary`):
+
+```lua
+local cam = self:get_component("Camera")
+if cam then cam.shader = "grayscale" end  -- or "native" / "retro" / a full pack
+```
+
+(`get_component` returns a frame-local pointer — set it in the frame you fetch
+it, don't cache it.)
+
+## Examples
+
+### Spin component (transform + tint pulse)
+
+```lua
+local speed = 90.0 -- degrees/sec
+
+local M = {}
+
+function M.on_start(self)
+    lm.log("spin start: " .. self.name)
+end
+
+function M.on_update(self, dt)
+    local t = self:get_transform()
+    t.rotation.y = t.rotation.y + speed * dt  -- Y = yaw
+
+    local mr = self:get_mesh_renderer()  -- nil-check: not auto-added
+    if mr then
+        local pulse = 0.5 + 0.5 * math.sin(lm.time.now() * 2.0)
+        mr:set_color(0.35 + 0.6 * pulse, 0.45, 0.95 - 0.6 * pulse)
+    end
+end
+
+return M
+```
+
+### Input-driven mover (WASD)
+
+```lua
+local speed = 6.0
+
+local M = {}
+
+function M.on_update(self, dt)
+    local t = self:get_transform()  -- re-fetch every frame, never cache
+    local dx, dz = 0.0, 0.0
+    if lm.input.key_down("w") then dz = dz - 1 end
+    if lm.input.key_down("s") then dz = dz + 1 end
+    if lm.input.key_down("a") then dx = dx - 1 end
+    if lm.input.key_down("d") then dx = dx + 1 end
+    t.position.x = t.position.x + dx * speed * dt
+    t.position.z = t.position.z + dz * speed * dt
+    if dx ~= 0 or dz ~= 0 then lm.audio.event("step") end
+end
+
+return M
+```
+
+### Procgen town spawn (deterministic)
+
+```lua
+local M = {}
+
+function M.on_start(self)
+    local town = lm.procgen.town{ seed = 1337, n = 32, tile_size = 2.5 }
+    lm.log(("town: %d pieces, %d repairs"):format(#town.pieces, town.repairs))
+
+    -- Terrain ground as a runtime mesh.
+    local ground = lm.scene.create("ground")
+    local key = lm.assets.add_mesh("town_terrain",
+                                   lm.procgen.terrain_mesh(town.terrain))
+    local mr = ground:get_mesh_renderer()  -- may be nil on a bare entity
+    if mr then mr.mesh = key end
+
+    -- One entity per built piece.
+    for i, piece in ipairs(town.pieces) do
+        local e = lm.scene.create("piece_" .. i)
+        local pkey = lm.assets.add_mesh("piece_" .. i, piece.mesh)
+        local pmr = e:get_mesh_renderer()
+        if pmr then pmr.mesh = pkey end
+        local t = e:get_transform()
+        t:set_position(piece.anchor.x, piece.anchor.y, piece.anchor.z)
+    end
+end
+
+return M
+```
+
+> Note: a `lm.scene.create` entity has a `Name` and (after `get_transform`) a
+> `Transform`, but **no** `MeshRenderer` until one is added — if `get_mesh_renderer`
+> returns nil here you must add the component another way (e.g. author it in the
+> scene). Re-register `runtime:` meshes in `on_start` since they don't survive a
+> scene reload.

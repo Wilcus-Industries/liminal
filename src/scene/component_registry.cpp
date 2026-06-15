@@ -3,10 +3,13 @@
 // (consumed by the Phase 6 editor; harmless without it).
 #include <liminal/scene/component_registry.hpp>
 
+#include <liminal/render/renderer.hpp>
 #include <liminal/scene/components.hpp>
 #include <liminal/scene/serialize.hpp>
 
 #include <imgui.h>
+
+#include <cstdio>
 
 // Defined in src/script/lua_bindings.cpp. Declared here instead of including
 // the sol2-heavy header so this file stays scripting-agnostic.
@@ -14,6 +17,7 @@ namespace liminal::luabind {
 void bindName(void* luaState);
 void bindTransform(void* luaState);
 void bindMeshRenderer(void* luaState);
+void bindCamera(void* luaState);
 } // namespace liminal::luabind
 #define LIMINAL_LUABIND(fn) (&liminal::luabind::fn)
 
@@ -111,20 +115,40 @@ void registerCamera(ComponentRegistry& r) {
             return nlohmann::json{{"fovDeg", c.fovDeg},
                                   {"nearZ", c.nearZ},
                                   {"farZ", c.farZ},
-                                  {"primary", c.primary}};
+                                  {"primary", c.primary},
+                                  {"shaderName", c.shaderName}};
         },
         [](Camera& c, const nlohmann::json& j) {
             c.fovDeg = j.value("fovDeg", 70.0f);
             c.nearZ = j.value("nearZ", 0.1f);
             c.farZ = j.value("farZ", 220.0f);
             c.primary = j.value("primary", true);
+            c.shaderName = j.value("shaderName", std::string("native"));
         },
         [](Camera& c) {
             ImGui::SliderFloat("fov", &c.fovDeg, 30.0f, 120.0f);
             ImGui::DragFloat("near", &c.nearZ, 0.01f, 0.001f, 10.0f);
             ImGui::DragFloat("far", &c.farZ, 1.0f, 10.0f, 2000.0f);
             ImGui::Checkbox("primary", &c.primary);
-        });
+            const auto& catalog = liminal::shaderCatalog();
+            if (!catalog.empty()) {
+                if (ImGui::BeginCombo("shader", c.shaderName.c_str())) {
+                    for (const auto& name : catalog) {
+                        bool sel = (name == c.shaderName);
+                        if (ImGui::Selectable(name.c_str(), sel)) c.shaderName = name;
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+            } else {
+                // Headless / catalog not populated: free-text fallback so the
+                // field is still editable and round-trips.
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%s", c.shaderName.c_str());
+                if (ImGui::InputText("shader", buf, sizeof(buf))) c.shaderName = buf;
+            }
+        },
+        LIMINAL_LUABIND(bindCamera));
 }
 
 void registerAudioSource(ComponentRegistry& r) {

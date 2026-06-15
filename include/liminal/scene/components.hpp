@@ -55,6 +55,9 @@ struct Camera {
     float nearZ = 0.1f;
     float farZ = 220.0f;
     bool primary = true;
+    // Selectable shader pack name (see liminal::shaderCatalog()). "native" is
+    // the built-in PS1 look.
+    std::string shaderName = "native";
 };
 
 // liminal::Audio is a single procedural-DSP voice bank, not a mixer of

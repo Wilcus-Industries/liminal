@@ -3,6 +3,8 @@
 
 #include "editor_app.hpp"
 
+#include "theme.hpp"
+
 #include <imgui.h>
 #include <imgui_internal.h> // DockBuilder API
 #include <ImGuizmo.h>
@@ -17,6 +19,9 @@
 #include <liminal/core/platform.hpp>
 #include <liminal/scene/component_registry.hpp>
 #include <liminal/scene/serialize.hpp>
+#include <liminal/version.hpp>
+
+#include <nlohmann/json.hpp>
 #if defined(LIMINAL_WITH_INFERENCE)
 #include <liminal/inference/engine.hpp>
 #endif
@@ -30,12 +35,23 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <sstream>
+#include <stdexcept>
 
 namespace fs = std::filesystem;
 
 namespace liminal::editor {
 
 namespace {
+
+// ImGui only focuses windows on left-click; focus on right-click too. Call
+// right after a panel's Begin() (window body being drawn) so right-clicking a
+// panel focuses it like left-click does.
+void focusOnRightClick() {
+    if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right) &&
+        !ImGui::IsWindowFocused())
+        ImGui::SetWindowFocus();
+}
 
 // Builtin asset names mirrored from <liminal/core/asset_cache.hpp> — there is
 // no enumeration API on AssetCache (names are an open set), so the browser
@@ -48,6 +64,18 @@ const char* kBuiltinTextures[] = {
     "builtin:white",   "builtin:checker", "builtin:grid",  "builtin:noise",
     "builtin:concrete", "builtin:wood",   "builtin:metal", "builtin:brick",
     "builtin:plaster", "builtin:grass",   "builtin:dirt",  "builtin:water"};
+
+// Resize the OS window to w x h and recenter it on the primary monitor's work
+// area. Used to shrink to a compact landing/chooser window and grow back to the
+// full editor on project open.
+void sizeAndCenter(GLFWwindow* win, int w, int h) {
+    glfwSetWindowSize(win, w, h);
+    if (GLFWmonitor* mon = glfwGetPrimaryMonitor()) {
+        int mx = 0, my = 0, mw = 0, mh = 0;
+        glfwGetMonitorWorkarea(mon, &mx, &my, &mw, &mh);
+        glfwSetWindowPos(win, mx + (mw - w) / 2, my + (mh - h) / 2);
+    }
+}
 
 std::string entityLabel(entt::registry& reg, entt::entity e) {
     if (const auto* n = reg.try_get<Name>(e); n && !n->value.empty())
@@ -78,7 +106,7 @@ bool isKnownBinaryExt(const std::string& extLower) {
 
 } // namespace
 
-EditorApp::EditorApp(std::string projectFile)
+EditorApp::EditorApp(std::string projectFile, bool startEmpty)
     : m_window(1600, 950, "liminal editor"),
       m_renderer(),
       m_imgui(m_window) {
@@ -88,19 +116,27 @@ EditorApp::EditorApp(std::string projectFile)
     // JetBrains Mono as the default font (first face added wins). Size by the
     // window's content scale and shrink FontGlobalScale back so retina renders
     // crisp. fs::exists is mandatory — AddFontFromFileTTF asserts on a missing
-    // file rather than returning null.
+    // file rather than returning null. A second, larger face (m_titleFont) backs
+    // the "LIMINAL" watermark on the landing screen.
     {
         ImGuiIO& io = ImGui::GetIO();
         float sx = 1.0f, sy = 1.0f;
         glfwGetWindowContentScale(m_window.handle(), &sx, &sy);
         const float scale = sx > 0.0f ? sx : 1.0f;
         if (fs::exists(LIMINAL_EDITOR_FONT_TTF) &&
-            io.Fonts->AddFontFromFileTTF(LIMINAL_EDITOR_FONT_TTF, 16.0f * scale))
+            io.Fonts->AddFontFromFileTTF(LIMINAL_EDITOR_FONT_TTF, 16.0f * scale)) {
             io.FontGlobalScale = 1.0f / scale;
-        else
+            m_titleFont =
+                io.Fonts->AddFontFromFileTTF(LIMINAL_EDITOR_FONT_TTF, 34.0f * scale);
+        } else {
             log("[editor] JetBrains Mono not found, using default font");
+        }
     }
 #endif
+
+    // Apply the active theme over ImGuiLayer's base StyleColorsDark. Runs after
+    // the font block so it's the last word on style at startup.
+    applyTheme(m_themeName);
 
     // Script editor pane logs through our console (decoupled via the sink).
     m_scriptEditor = std::make_unique<ScriptEditorPanel>(
@@ -112,8 +148,24 @@ EditorApp::EditorApp(std::string projectFile)
 
     registerBuiltinComponents();
     m_gizmoOp = ImGuizmo::TRANSLATE;
+    // Seed the Camera-inspector shader catalog with the built-ins so the
+    // dropdown works before any project (with shaders/) is opened. openProject
+    // -> scanShaders rebuilds it with discovered user shaders.
+    shaderCatalog() = {"native", "retro"};
     log("[editor] liminal editor started");
-    if (!projectFile.empty()) openProject(projectFile);
+
+    // Screen selection: a project path opens straight into the editor; --empty
+    // opens a blank editor scene; otherwise show the landing / project chooser.
+    if (!projectFile.empty()) {
+        openProject(projectFile); // flips m_screen -> Editor on success
+    } else if (startEmpty) {
+        m_screen = Screen::Editor;
+    } else {
+        m_screen = Screen::Landing;
+        m_recents = loadRecentProjects();
+        // Compact chooser window (half the editor size); grows back on open.
+        sizeAndCenter(m_window.handle(), 800, 475);
+    }
 }
 
 EditorApp::~EditorApp() = default;
@@ -128,12 +180,39 @@ void EditorApp::run() {
         m_dt = std::min(float(now - last), 0.1f);
         last = now;
 
+        // While a script holds the cursor captured in Play, the OS cursor is
+        // GLFW_CURSOR_DISABLED (hidden + locked) but glfwGetCursorPos still
+        // reports unbounded virtual motion, which the ImGui backend feeds to
+        // io.MousePos — so ImGui would hover/highlight panels behind the game.
+        // ConfigFlags_NoMouse makes NewFrame ignore the mouse entirely. Must be
+        // set before beginFrame() (NewFrame reads it). The free-cursor case is
+        // handled separately by confineCursorToViewport(). Toggle only this bit.
+        {
+            ImGuiIO& io = ImGui::GetIO();
+            const bool gameOwnsMouse =
+                m_mode == Mode::Play && !m_paused && m_window.cursorCaptured();
+            if (gameOwnsMouse) io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+            else io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+        }
+
         m_imgui.beginFrame();
         ImGuizmo::BeginFrame();
+
+        if (m_screen == Screen::Landing) {
+            // No scene/FBO work before a project is open: the landing screen is
+            // pure ImGui over a cleared backbuffer.
+            drawLanding();
+            m_imgui.endFrame();
+            m_window.swapBuffers();
+            continue;
+        }
 
         // Drain MCP tool tasks on the main thread so they read scene state
         // safely (the http threads parked them here — see mcp_server.hpp).
         if (m_mcp) m_mcp->pump();
+
+        // Hot-reload custom shaders edited on disk (throttled ~0.5s inside).
+        tickShaderWatch();
 
         if (m_mode == Mode::Play && !m_paused && m_scripts)
             m_scripts->update(m_scene, m_dt);
@@ -142,21 +221,357 @@ void EditorApp::run() {
         // the backbuffer is fully covered by the dockspace; the viewport panel
         // shows colorTexture() instead.
         m_view = currentView();
-        m_proj = m_renderer.projection();
-        m_renderer.beginFrame(m_view);
-        renderScene();
         int fbw = 0, fbh = 0;
         m_window.framebufferSize(fbw, fbh);
+        m_renderer.beginFrame(m_view, fbw, fbh);
+        // projection() derives aspect from the render size resolved inside
+        // beginFrame, so fetch it after beginFrame.
+        m_proj = m_renderer.projection();
+        renderScene();
         m_renderer.endFrame(fbw, fbh);
 
+        // Cleared each frame; drawViewport re-stamps it. If the Viewport panel
+        // isn't drawn, the empty rect makes confineCursorToViewport a no-op.
+        m_viewportMaxX = m_viewportMinX = 0.0f;
+        m_viewportMaxY = m_viewportMinY = 0.0f;
         drawUi();
+        confineCursorToViewport();
 
         m_imgui.endFrame();
         m_window.swapBuffers();
     }
 }
 
+// --- landing screen ----------------------------------------------------------
+
+namespace {
+
+const char* const kRepoUrl = "https://github.com/wilcus-industries/liminal";
+
+// Collapse a leading $HOME to "~" for compact display of project paths.
+std::string collapseHome(const std::string& path) {
+    if (const char* home = std::getenv("HOME")) {
+        const std::string h = home;
+        if (!h.empty() && path.rfind(h, 0) == 0)
+            return "~" + path.substr(h.size());
+    }
+    return path;
+}
+
+// 1–2 uppercase initials from a title for the project avatar (JetBrains-style).
+std::string avatarInitials(const std::string& title) {
+    std::string out;
+    bool wordStart = true;
+    for (char c : title) {
+        const bool alnum = std::isalnum(static_cast<unsigned char>(c)) != 0;
+        if (!alnum) { wordStart = true; continue; }
+        if (wordStart) {
+            out += char(std::toupper(static_cast<unsigned char>(c)));
+            if (out.size() >= 2) break;
+            wordStart = false;
+        }
+    }
+    if (out.empty()) out = "?";
+    return out;
+}
+
+// Deterministic avatar fill color from the project path (FNV-1a -> hue palette).
+ImU32 avatarColor(const std::string& key) {
+    std::uint32_t h = 2166136261u;
+    for (char c : key) { h ^= std::uint8_t(c); h *= 16777619u; }
+    static const ImU32 palette[] = {
+        IM_COL32(0x6c, 0x5c, 0xe7, 255), IM_COL32(0x00, 0x98, 0x88, 255),
+        IM_COL32(0xd6, 0x3a, 0x6a, 255), IM_COL32(0x2d, 0x7d, 0xd2, 255),
+        IM_COL32(0x8e, 0x44, 0xad, 255), IM_COL32(0xc0, 0x7f, 0x2c, 255),
+        IM_COL32(0x44, 0x8a, 0x44, 255), IM_COL32(0xb0, 0x3a, 0x3a, 255)};
+    return palette[h % (sizeof(palette) / sizeof(palette[0]))];
+}
+
+} // namespace
+
+void EditorApp::drawLanding() {
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::SetNextWindowViewport(vp->ID);
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+        ImGuiWindowFlags_NoDocking;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("##liminal-landing", nullptr, flags);
+    ImGui::PopStyleVar(3);
+
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float leftW = std::max(320.0f, avail.x * 0.34f);
+    bool wantCreate = false;
+    std::string pendingOpen;        // a recent row clicked this frame
+    std::string pendingRemove;      // a recent row's "remove" clicked
+
+    // --- left column: watermark + actions + repo/version footer ---
+    ImGui::BeginChild("##landing-left", ImVec2(leftW, avail.y), false);
+    {
+        const float pad = 28.0f;
+        ImGui::Dummy(ImVec2(0, 26));
+        ImGui::Indent(pad);
+
+        if (m_titleFont) ImGui::PushFont(m_titleFont);
+        ImGui::TextUnformatted("LIMINAL");
+        if (m_titleFont) ImGui::PopFont();
+        ImGui::TextDisabled("game engine");
+
+        ImGui::Dummy(ImVec2(0, 28));
+
+        // Action list — append to grow (e.g. a future "Settings" entry).
+        struct LandingAction {
+            const char* label;
+            std::function<void()> on;
+        };
+        std::vector<LandingAction> actions = {
+            {"Create new project", [&] { wantCreate = true; }},
+            {"Quit", [&] { m_window.requestClose(); }},
+        };
+        const float btnW = leftW - pad * 2.0f;
+        for (const auto& a : actions) {
+            if (ImGui::Button(a.label, ImVec2(btnW, 36))) a.on();
+            ImGui::Dummy(ImVec2(0, 6));
+        }
+
+        ImGui::Unindent(pad);
+
+        // Footer pinned to the bottom: git-branch glyph + version/commit, the
+        // whole row a link to the repo (glyph + text turn blue on hover).
+        const float lineH = ImGui::GetTextLineHeight();
+        const float footerH = lineH + 8.0f;
+        ImGui::SetCursorPosY(avail.y - footerH - 16.0f);
+        ImGui::SetCursorPosX(pad);
+
+        std::string label = std::string("v") + kVersionString;
+        if (std::string(kGitCommit) != "unknown")
+            label += "  " + std::string(kGitCommit);
+
+        const ImVec2 textSz = ImGui::CalcTextSize(label.c_str());
+        const float iconSz = lineH;
+        const float gap = 8.0f;
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##repo-link",
+                               ImVec2(iconSz + gap + textSz.x, iconSz));
+        const bool hov = ImGui::IsItemHovered();
+        if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (ImGui::IsItemClicked()) openUrl(kRepoUrl);
+
+        const ImU32 col =
+            hov ? IM_COL32(80, 150, 255, 255)
+                : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        // git-branch icon: a trunk (two nodes) with one branch node off the top.
+        const float r = iconSz * 0.13f;
+        const ImVec2 a(p.x + r * 1.6f, p.y + r * 1.6f);            // top trunk
+        const ImVec2 b(p.x + r * 1.6f, p.y + iconSz - r * 1.6f);   // bottom trunk
+        const ImVec2 c(p.x + iconSz - r * 1.6f, p.y + r * 1.6f);   // branch node
+        dl->AddLine(a, b, col, 1.6f);
+        dl->AddLine(ImVec2(a.x, (a.y + b.y) * 0.5f), c, col, 1.6f);
+        dl->AddCircleFilled(a, r, col);
+        dl->AddCircleFilled(b, r, col);
+        dl->AddCircleFilled(c, r, col);
+        dl->AddText(ImVec2(p.x + iconSz + gap, p.y + (iconSz - textSz.y) * 0.5f),
+                    col, label.c_str());
+    }
+    ImGui::EndChild();
+
+    ImGui::SameLine(0, 0);
+
+    // --- right column: recent projects ---
+    ImGui::BeginChild("##landing-right", ImVec2(0, avail.y), false);
+    {
+        const float pad = 28.0f;
+        ImGui::Dummy(ImVec2(0, 26));
+        ImGui::Indent(pad);
+        ImGui::TextUnformatted("Recent projects");
+        ImGui::Dummy(ImVec2(0, 10));
+
+        if (m_recents.empty()) {
+            ImGui::TextDisabled("No recent projects yet.");
+            ImGui::TextDisabled("Create one to get started.");
+        }
+
+        const float rowW = ImGui::GetContentRegionAvail().x - pad;
+        const float lineH = ImGui::GetTextLineHeight();
+        const float rowH = lineH * 2.0f + 16.0f;
+        for (std::size_t i = 0; i < m_recents.size(); ++i) {
+            const RecentProject& rp = m_recents[i];
+            const bool exists = fs::exists(rp.path);
+            ImGui::PushID(static_cast<int>(i));
+            const ImVec2 rowStart = ImGui::GetCursorScreenPos();
+            // Full-row selectable; manual content drawn on top.
+            if (ImGui::Selectable("##row", false,
+                                  ImGuiSelectableFlags_AllowOverlap,
+                                  ImVec2(rowW, rowH)) &&
+                exists)
+                pendingOpen = rp.path;
+            if (ImGui::BeginPopupContextItem("##row-ctx")) {
+                if (ImGui::MenuItem("Remove from list")) pendingRemove = rp.path;
+                ImGui::EndPopup();
+            }
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const float av = rowH - 16.0f;
+            const ImVec2 ap(rowStart.x + 8.0f, rowStart.y + 8.0f);
+            const ImU32 acol =
+                exists ? avatarColor(rp.path) : IM_COL32(90, 90, 90, 255);
+            dl->AddRectFilled(ap, ImVec2(ap.x + av, ap.y + av), acol, 7.0f);
+            const std::string ini = avatarInitials(rp.title);
+            const ImVec2 inSz = ImGui::CalcTextSize(ini.c_str());
+            dl->AddText(ImVec2(ap.x + (av - inSz.x) * 0.5f,
+                               ap.y + (av - inSz.y) * 0.5f),
+                        IM_COL32_WHITE, ini.c_str());
+
+            const float tx = ap.x + av + 14.0f;
+            const ImU32 titleCol =
+                exists ? ImGui::GetColorU32(ImGuiCol_Text)
+                       : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+            dl->AddText(ImVec2(tx, rowStart.y + 8.0f), titleCol,
+                        rp.title.c_str());
+            const std::string sub =
+                exists ? collapseHome(rp.path) : collapseHome(rp.path) + "  (missing)";
+            // Truncate the path's tail with "..." when it overruns the row.
+            const float availW = (rowStart.x + rowW) - tx - 8.0f;
+            std::string display = sub;
+            bool truncated = false;
+            if (ImGui::CalcTextSize(sub.c_str()).x > availW) {
+                truncated = true;
+                std::size_t n = sub.size();
+                while (n > 3 &&
+                       ImGui::CalcTextSize((sub.substr(0, n) + "...").c_str()).x >
+                           availW)
+                    --n;
+                display = sub.substr(0, n) + "...";
+            }
+            const ImVec2 pPos(tx, rowStart.y + 8.0f + lineH + 4.0f);
+            dl->AddText(pPos, ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                        display.c_str());
+            if (truncated) {
+                const ImVec2 pSz = ImGui::CalcTextSize(display.c_str());
+                if (ImGui::IsMouseHoveringRect(
+                        pPos, ImVec2(pPos.x + availW, pPos.y + pSz.y)))
+                    ImGui::SetTooltip("%s", sub.c_str());
+            }
+            ImGui::PopID();
+        }
+        ImGui::Unindent(pad);
+    }
+    ImGui::EndChild();
+
+    // --- Create Project modal ---
+    if (wantCreate) {
+        if (const char* home = std::getenv("HOME"))
+            std::snprintf(m_projectPathBuf, sizeof(m_projectPathBuf), "%s", home);
+        m_newProjectNameBuf[0] = '\0';
+        ImGui::OpenPopup("Create Project");
+    }
+    if (ImGui::BeginPopupModal("Create Project", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Parent directory:");
+        ImGui::SetNextItemWidth(480);
+        ImGui::InputText("##parentdir", m_projectPathBuf, sizeof(m_projectPathBuf));
+        ImGui::TextUnformatted("Project name:");
+        ImGui::SetNextItemWidth(480);
+        ImGui::InputText("##projname", m_newProjectNameBuf,
+                         sizeof(m_newProjectNameBuf));
+        const bool ready =
+            m_projectPathBuf[0] != '\0' && m_newProjectNameBuf[0] != '\0';
+        if (ready) {
+            const fs::path dest =
+                fs::path(m_projectPathBuf) / m_newProjectNameBuf;
+            ImGui::TextDisabled("Creates %s", dest.string().c_str());
+        }
+        ImGui::Dummy(ImVec2(0, 4));
+        if (!ready) ImGui::BeginDisabled();
+        if (ImGui::Button("Create")) {
+            createProject(m_projectPathBuf, m_newProjectNameBuf);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!ready) ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    ImGui::End();
+
+    // Apply deferred actions after the window closes (openProject rebuilds a lot
+    // of state; mutating m_recents mid-iteration would be unsafe).
+    if (!pendingRemove.empty()) {
+        removeRecentProject(pendingRemove);
+        m_recents = loadRecentProjects();
+    }
+    if (!pendingOpen.empty()) openProject(pendingOpen);
+}
+
+void EditorApp::createProject(const std::string& parentDir,
+                              const std::string& name) {
+    if (name.empty()) {
+        log("[editor] create project: name required");
+        return;
+    }
+    const fs::path root = fs::path(parentDir) / name;
+    std::error_code ec;
+    fs::create_directories(root / "scenes", ec);
+    if (ec) {
+        log("[editor] create project failed: " + ec.message());
+        return;
+    }
+
+    // project.ljson — assetRoot is the project dir; startupScene relative to it.
+    {
+        nlohmann::json pj = {{"assetRoot", "."},
+                             {"startupScene", "scenes/main.lscene"},
+                             {"title", name}};
+        std::ofstream out(root / "project.ljson");
+        if (!out) {
+            log("[editor] create project: cannot write project.ljson");
+            return;
+        }
+        out << pj.dump(4) << '\n';
+    }
+
+    // Default scene: a primary camera looking at a textured cube + a light.
+    {
+        Scene s;
+        Entity cam = s.create("camera");
+        cam.add(Transform{.position = {0.0f, 2.0f, 6.0f},
+                          .rotationEuler = {-12.0f, 0.0f, 0.0f}});
+        cam.add(Camera{}); // primary by default, "native" shader
+        Entity cube = s.create("cube");
+        cube.add(Transform{.position = {0.0f, 0.5f, 0.0f}});
+        cube.add(MeshRenderer{}); // builtin:box
+        Entity light = s.create("light");
+        light.add(Transform{.position = {3.0f, 5.0f, 2.0f}});
+        light.add(Light{});
+        if (!s.save((root / "scenes" / "main.lscene").string()))
+            log("[editor] create project: failed to write default scene");
+    }
+
+    log("[editor] created project: " + root.string());
+    openProject(root.string()); // flips to the editor + records the recent
+}
+
 glm::mat4 EditorApp::currentView() {
+    // Select the active shader pack from the first primary camera in BOTH edit
+    // and play mode, so the viewport previews the chosen shader even when not
+    // playing. Defaults to "native" when there is no primary camera.
+    {
+        bool shaderFound = false;
+        m_scene.each<Transform, Camera>([&](Entity, Transform&, Camera& c) {
+            if (shaderFound || !c.primary) return;
+            shaderFound = true;
+            m_renderer.useShaderPack(c.shaderName);
+        });
+        if (!shaderFound) m_renderer.useShaderPack("native");
+    }
     if (m_mode == Mode::Play) {
         bool found = false;
         glm::mat4 view(1.0f);
@@ -260,9 +675,27 @@ void EditorApp::buildDefaultLayout(unsigned int dockspaceId) {
     ImGui::DockBuilderFinish(dockId);
 }
 
+void EditorApp::applyTheme(const std::string& name) {
+    const theme::Theme* t = theme::find(name);
+    if (!t) {
+        log("[editor] unknown theme: " + name);
+        return;
+    }
+    // Reset to stock defaults first: StyleColors* only rewrites Colors[], not
+    // layout vars (WindowRounding, FramePadding, ...). Without this, switching
+    // from a theme that tweaks vars to one that doesn't would leave the old
+    // vars stuck. Reset makes every theme idempotent and order-independent.
+    ImGuiStyle& s = ImGui::GetStyle();
+    s = ImGuiStyle();
+    t->apply(s);
+    m_themeName = name;
+}
+
 void EditorApp::drawMenuBar() {
     bool wantOpenProject = false, wantOpenScene = false, wantSaveAs = false;
     bool wantBuild = false;
+    // Close Project: deferred so OpenPopup runs outside the BeginMenu scope.
+    bool wantCloseProject = false, wantCloseConfirm = false;
 
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -277,6 +710,16 @@ void EditorApp::drawMenuBar() {
                     saveScene(m_scenePath);
             }
             if (ImGui::MenuItem("Save Scene As...")) wantSaveAs = true;
+            ImGui::Separator();
+            // Close Project: confirm first if any script tab is dirty (the
+            // editor has no scene-dirty tracking, so that's the only check).
+            if (ImGui::MenuItem("Close Project", nullptr, false,
+                                !m_projectFile.empty())) {
+                if (m_scriptEditor && m_scriptEditor->anyDirty())
+                    wantCloseConfirm = true;
+                else
+                    wantCloseProject = true;
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Quit")) m_window.requestClose();
             ImGui::EndMenu();
@@ -295,6 +738,14 @@ void EditorApp::drawMenuBar() {
                 wantBuild = true;
             if (!canBuild && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip("Open a project and stop Play to build a game.");
+            ImGui::EndMenu();
+        }
+        // Theme menu — one caller of applyTheme; a future settings window is
+        // another. No menu-specific switching logic lives here.
+        if (ImGui::BeginMenu("Theme")) {
+            for (const auto& t : theme::registry())
+                if (ImGui::MenuItem(t.name.c_str(), nullptr, m_themeName == t.name))
+                    applyTheme(t.name);
             ImGui::EndMenu();
         }
         ImGui::TextDisabled("| %s%s",
@@ -320,6 +771,11 @@ void EditorApp::drawMenuBar() {
                 saveScene(m_scenePath);
         }
     }
+
+    // Close Project: the no-confirm path runs straight away (deferred out of
+    // the menu scope); the dirty path queues the discard-confirm modal.
+    if (wantCloseProject) closeProject();
+    if (wantCloseConfirm) ImGui::OpenPopup("Discard unsaved changes?");
 
     // Modals (single-instance editor: function-local request -> popup).
     if (wantOpenProject) {
@@ -402,10 +858,23 @@ void EditorApp::drawMenuBar() {
         if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+    if (ImGui::BeginPopupModal("Discard unsaved changes?", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(
+            "You have unsaved script changes. Close the project anyway?");
+        if (ImGui::Button("Discard & Close")) {
+            closeProject();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
 }
 
 void EditorApp::drawHierarchy() {
     ImGui::Begin("Hierarchy");
+    focusOnRightClick();
 
     if (ImGui::Button("+ Empty")) {
         Entity e = m_scene.create("entity");
@@ -453,6 +922,7 @@ void EditorApp::drawHierarchy() {
 
 void EditorApp::drawInspector() {
     ImGui::Begin("Inspector");
+    focusOnRightClick();
     entt::registry& reg = m_scene.registry();
     if (m_selected == entt::null || !reg.valid(m_selected)) {
         ImGui::TextDisabled("no selection");
@@ -493,6 +963,7 @@ void EditorApp::drawInspector() {
 
 void EditorApp::drawViewport() {
     ImGui::Begin("Viewport");
+    focusOnRightClick();
 
     // Toolbar: play controls + gizmo mode.
     if (m_mode == Mode::Edit) {
@@ -522,6 +993,18 @@ void EditorApp::drawViewport() {
         ImGui::End();
         return;
     }
+    // Record the Viewport window rect for confineCursorToViewport (Play mode).
+    // Whole window, not just the image, so the Play/Pause/Stop toolbar stays
+    // clickable while other docked panels are walled off.
+    {
+        const ImVec2 wpos = ImGui::GetWindowPos();
+        const ImVec2 wsize = ImGui::GetWindowSize();
+        m_viewportMinX = wpos.x;
+        m_viewportMinY = wpos.y;
+        m_viewportMaxX = wpos.x + wsize.x;
+        m_viewportMaxY = wpos.y + wsize.y;
+    }
+
     ImVec2 cursor = ImGui::GetCursorPos();
     cursor.x += (avail.x - size.x) * 0.5f;
     cursor.y += (avail.y - size.y) * 0.5f;
@@ -535,6 +1018,24 @@ void EditorApp::drawViewport() {
     const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
 
     handleCameraInput(hovered);
+
+    // Scroll-to-adjust camera-speed indicator. Editor-only (lives in the
+    // editor viewport draw); fades over its last 0.4s. Set in handleCameraInput.
+    if (m_camSpeedHud > 0.0f) {
+        m_camSpeedHud -= m_dt;
+        const float alpha = std::clamp(m_camSpeedHud / 0.4f, 0.0f, 1.0f);
+        char buf[48];
+        std::snprintf(buf, sizeof buf, "Camera speed  %.1f", m_camSpeed);
+        const ImVec2 ts = ImGui::CalcTextSize(buf);
+        const ImVec2 pad(10.0f, 6.0f);
+        ImVec2 tp(imgMin.x + (size.x - ts.x) * 0.5f,
+                  imgMin.y + size.y - ts.y - 24.0f);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(ImVec2(tp.x - pad.x, tp.y - pad.y),
+                          ImVec2(tp.x + ts.x + pad.x, tp.y + ts.y + pad.y),
+                          ImGui::GetColorU32(ImVec4(0, 0, 0, 0.55f * alpha)), 5.0f);
+        dl->AddText(tp, ImGui::GetColorU32(ImVec4(1, 1, 1, alpha)), buf);
+    }
 
     // Gizmo mode hotkeys — never while flying or typing.
     ImGuiIO& io = ImGui::GetIO();
@@ -557,7 +1058,24 @@ void EditorApp::drawViewport() {
 }
 
 void EditorApp::handleCameraInput(bool viewportHovered) {
+    // Play: scripts own the cursor/camera (like the standalone player) — don't
+    // stomp a script-driven setCursorCaptured. RMB-fly is an Edit-mode tool.
+    if (m_mode != Mode::Edit) return;
     const bool rmb = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+
+    // Scroll adjusts fly speed whenever the viewport is hovered (no RMB needed),
+    // and also while actively flying (capture hides the cursor so hover reads
+    // false). Read here, before the not-flying early-return, so a plain scroll
+    // over the viewport tweaks speed + shows the HUD.
+    if (viewportHovered || m_window.cursorCaptured()) {
+        const float scroll = m_window.scrollDelta();
+        if (scroll != 0.0f) {
+            m_camSpeed =
+                std::clamp(m_camSpeed * (1.0f + scroll * 0.12f), 0.5f, 60.0f);
+            m_camSpeedHud = 1.2f; // show the speed indicator, then fade
+        }
+    }
+
     if (viewportHovered && rmb && !m_window.cursorCaptured())
         m_window.setCursorCaptured(true);
     if (!rmb && m_window.cursorCaptured()) m_window.setCursorCaptured(false);
@@ -567,10 +1085,6 @@ void EditorApp::handleCameraInput(bool viewportHovered) {
     m_window.mouseDelta(dx, dy);
     m_camYaw -= dx * 0.18f;
     m_camPitch = std::clamp(m_camPitch - dy * 0.18f, -89.0f, 89.0f);
-
-    const float scroll = m_window.scrollDelta();
-    if (scroll != 0.0f)
-        m_camSpeed = std::clamp(m_camSpeed * (1.0f + scroll * 0.12f), 0.5f, 60.0f);
 
     const float yaw = glm::radians(m_camYaw);
     const float pitch = glm::radians(m_camPitch);
@@ -586,6 +1100,21 @@ void EditorApp::handleCameraInput(bool viewportHovered) {
     if (m_window.keyDown(GLFW_KEY_Q)) move.y -= 1.0f;
     if (glm::dot(move, move) > 0.0f)
         m_camPos += glm::normalize(move) * m_camSpeed * m_dt;
+}
+
+void EditorApp::confineCursorToViewport() {
+    // Only while actively playing with a free (visible) cursor. A script-
+    // captured cursor is already GLFW_CURSOR_DISABLED (locked); pause leaves the
+    // cursor free on purpose so the user can poke editor panels.
+    if (m_mode != Mode::Play || m_paused || m_window.cursorCaptured()) return;
+    if (m_viewportMaxX <= m_viewportMinX || m_viewportMaxY <= m_viewportMinY)
+        return; // viewport not drawn this frame
+    GLFWwindow* w = m_window.handle();
+    double x = 0.0, y = 0.0;
+    glfwGetCursorPos(w, &x, &y);
+    const double cx = std::clamp(x, double(m_viewportMinX), double(m_viewportMaxX));
+    const double cy = std::clamp(y, double(m_viewportMinY), double(m_viewportMaxY));
+    if (cx != x || cy != y) glfwSetCursorPos(w, cx, cy);
 }
 
 bool EditorApp::drawGizmo(const glm::vec2& imgMin, const glm::vec2& imgSize) {
@@ -696,6 +1225,7 @@ void EditorApp::pickEntity(const glm::vec2& uv) {
 
 void EditorApp::drawAssetBrowser() {
     ImGui::Begin("Asset Browser");
+    focusOnRightClick();
 
     if (ImGui::Button("Refresh")) refreshAssetTree();
     ImGui::SameLine();
@@ -766,6 +1296,7 @@ void EditorApp::drawAssetBrowser() {
 
 void EditorApp::drawConsole() {
     ImGui::Begin("Console");
+    focusOnRightClick();
     if (ImGui::Button("Clear")) m_console.clear();
     ImGui::Separator();
     ImGui::BeginChild("##consolelines", ImVec2(0, 0), ImGuiChildFlags_None,
@@ -828,9 +1359,57 @@ void EditorApp::openProject(const std::string& projectFile) {
     // Claude Code in the editor terminal knows the `lm` API. Non-fatal.
     seedLuaSkill();
 
+    // Discover custom shaders under <projectDir>/shaders/ and (re)build the
+    // Camera-inspector shader catalog. Built-ins are always present.
+    scanShaders();
+
     // Bring up the MCP endpoint and (re)write .mcp.json now that the project
     // path / dir are known. Non-fatal if it fails (logged inside).
     startMcpServer();
+
+    // Remember this project for the landing screen, and leave the chooser.
+    recordRecentProject(m_projectFile, m_projectTitle);
+    // Grow back to the full editor size if we came from the compact chooser.
+    if (m_screen == Screen::Landing) sizeAndCenter(m_window.handle(), 1600, 950);
+    m_screen = Screen::Editor;
+}
+
+void EditorApp::closeProject() {
+    if (m_mode == Mode::Play) stopPlay();
+
+    // Drop the MCP server (dtor stops + joins its thread) and the terminal
+    // session, then recreate a fresh terminal so a future open re-spawns clean.
+    m_mcp.reset();
+    if (m_terminal) m_terminal->stopSession();
+    m_terminal = std::make_unique<TerminalPanel>();
+
+    // Recreate the script editor from scratch — drops every open tab (their
+    // dirtiness was already confirmed away by the caller).
+    m_scriptEditor = std::make_unique<ScriptEditorPanel>(
+        [this](const std::string& line) { log(line); });
+
+    // Clear scene + selection.
+    m_scene = Scene();
+    m_scenePath.clear();
+    m_selected = entt::null;
+
+    // Clear project state.
+    m_projectFile.clear();
+    m_assetRoot.clear();
+    m_projectTitle.clear();
+    m_startupScene.clear();
+    m_assetTree = FsEntry{};
+
+    // Reset the shader catalog to the built-ins and drop discovered watches.
+    shaderCatalog() = {"native", "retro"};
+    m_shaderWatch.clear();
+
+    // Reload recents and shrink back to the landing chooser.
+    m_recents = loadRecentProjects();
+    m_screen = Screen::Landing;
+    sizeAndCenter(m_window.handle(), 800, 475);
+
+    log("[editor] project closed");
 }
 
 void EditorApp::newScene() {
@@ -1048,6 +1627,7 @@ void EditorApp::startPlay() {
 void EditorApp::stopPlay() {
     if (m_mode != Mode::Play) return;
     m_scripts.reset();
+    m_window.setCursorCaptured(false); // a script may have left the cursor locked
 #if defined(LIMINAL_WITH_INFERENCE)
     // Release model memory between play sessions; the engine object persists
     // and start()s again on the next lm.ai.start.
@@ -1334,6 +1914,200 @@ void EditorApp::seedLuaSkill() {
     out << src.rdbuf();
     log("[skill] seeded liminal-lua skill -> " + dest.string());
 #endif
+}
+
+// --- custom shader discovery + hot reload -----------------------------------
+
+namespace {
+
+// Default vertex source for frag-only shaders — an exact copy of
+// assets/shaders/native/scene.vert so wrapped fragments link against the same
+// varyings (vNormal/vViewDist/vGradT/smooth vUV) the native pack emits.
+const char* kFragOnlyVert = R"GLSL(#version 410 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUV;
+
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProj;
+uniform mat3 uNormalMat;
+uniform float uGradBase;
+uniform float uGradInv;
+
+out vec3 vNormal;
+out float vViewDist;
+out float vGradT;
+smooth out vec2 vUV;
+
+void main()
+{
+    vec4 viewPos = uView * uModel * vec4(aPos, 1.0);
+    vNormal = uNormalMat * aNormal;
+    vViewDist = length(viewPos.xyz);
+    vGradT = clamp((aPos.y - uGradBase) * uGradInv, 0.0, 1.0);
+    vUV = aUV;
+    gl_Position = uProj * viewPos;
+}
+)GLSL";
+
+// Prepended to a frag-only file's body. Frag-only files are BODIES ONLY — no
+// #version, no in/out/uniform decls — the engine provides them here. Authors
+// write `void main(){ ... }` using these ins/uniforms and write FragColor.
+const char* kFragOnlyHeader = R"GLSL(#version 410 core
+in vec3 vNormal;
+in float vViewDist;
+in float vGradT;
+smooth in vec2 vUV;
+
+uniform sampler2D uTex;
+uniform vec3 uColor;
+uniform vec3 uColor2;
+uniform vec3 uLightDir;
+uniform float uAlphaTest;
+
+out vec4 FragColor;
+
+)GLSL";
+
+std::string slurp(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    if (!in) throw std::runtime_error("cannot read " + p.string());
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+} // namespace
+
+void EditorApp::registerShaderFromDisk(const std::string& name,
+                                       const fs::path& full, bool fragOnly) {
+    ShaderPack pack = ShaderPack::standard(); // borrow the shared blit stage
+    pack.label = name;
+    pack.res = ShaderResolution::Native;
+
+    ShaderWatch w;
+    w.full = full;
+    w.fragOnly = fragOnly;
+    std::error_code ec;
+    if (fragOnly) {
+        pack.sceneVert = kFragOnlyVert;
+        pack.sceneFrag = std::string(kFragOnlyHeader) + slurp(full);
+        w.fragMtime = fs::last_write_time(full, ec);
+    } else {
+        const fs::path vert = full / "scene.vert";
+        const fs::path frag = full / "scene.frag";
+        pack.sceneVert = slurp(vert);
+        pack.sceneFrag = slurp(frag);
+        w.vertMtime = fs::last_write_time(vert, ec);
+        w.fragMtime = fs::last_write_time(frag, ec);
+    }
+
+    // Registration stores source only (recompiles immediately if active — the
+    // hot-reload mechanism). May throw on the active-pack recompile.
+    m_renderer.registerShaderPack(name, std::move(pack));
+
+    // Record / refresh the watch entry.
+    for (auto& e : m_shaderWatch)
+        if (e.first == name) {
+            e.second = std::move(w);
+            return;
+        }
+    m_shaderWatch.emplace_back(name, std::move(w));
+}
+
+void EditorApp::scanShaders() {
+    // Always seed the catalog with the built-ins, even with no shaders/ dir.
+    auto& catalog = shaderCatalog();
+    catalog = {"native", "retro"};
+    m_shaderWatch.clear();
+
+    if (m_projectFile.empty()) return;
+    const fs::path dir = fs::path(m_projectFile).parent_path() / "shaders";
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return; // no shaders/ — built-ins only
+
+    std::vector<fs::directory_entry> entries;
+    for (auto it = fs::directory_iterator(dir, ec);
+         !ec && it != fs::directory_iterator(); it.increment(ec))
+        entries.push_back(*it);
+    std::sort(entries.begin(), entries.end(),
+              [](const fs::directory_entry& a, const fs::directory_entry& b) {
+                  return a.path().filename() < b.path().filename();
+              });
+
+    for (const auto& entry : entries) {
+        const fs::path p = entry.path();
+        if (entry.is_directory(ec)) {
+            // Full pack: subdir with both scene.vert and scene.frag.
+            if (!fs::exists(p / "scene.vert", ec) ||
+                !fs::exists(p / "scene.frag", ec))
+                continue;
+            const std::string name = p.filename().string();
+            try {
+                registerShaderFromDisk(name, p, /*fragOnly=*/false);
+                catalog.push_back(name);
+                log("[shader] registered pack '" + name + "' (full)");
+            } catch (const std::exception& e) {
+                log("[shader] skip '" + name + "': " + e.what());
+            }
+        } else if (p.extension() == ".frag") {
+            // Frag-only: engine wraps it. Name = file stem.
+            const std::string name = p.stem().string();
+            try {
+                registerShaderFromDisk(name, p, /*fragOnly=*/true);
+                catalog.push_back(name);
+                log("[shader] registered pack '" + name + "' (frag-only)");
+            } catch (const std::exception& e) {
+                log("[shader] skip '" + name + "': " + e.what());
+            }
+        }
+    }
+}
+
+void EditorApp::tickShaderWatch() {
+    m_shaderReloadTimer += m_dt;
+    if (m_shaderReloadTimer < 0.5f) return;
+    m_shaderReloadTimer = 0.0f;
+    if (m_shaderWatch.empty()) return;
+
+    for (auto& [name, w] : m_shaderWatch) {
+        std::error_code ec;
+        bool changed = false;
+        if (w.fragOnly) {
+            const auto fm = fs::last_write_time(w.full, ec);
+            if (!ec && fm != w.fragMtime) changed = true;
+        } else {
+            const auto vm = fs::last_write_time(w.full / "scene.vert", ec);
+            bool vEc = (bool)ec;
+            ec.clear();
+            const auto fm = fs::last_write_time(w.full / "scene.frag", ec);
+            if ((!vEc && vm != w.vertMtime) || (!ec && fm != w.fragMtime))
+                changed = true;
+        }
+        if (!changed) continue;
+
+        // Re-register; registerShaderPack recompiles immediately if this is the
+        // active pack and throws on compile failure — catch + keep the last
+        // good program (the Renderer left it untouched), log, stay running.
+        try {
+            registerShaderFromDisk(name, w.full, w.fragOnly);
+            log("[shader] reloaded '" + name + "'");
+        } catch (const std::exception& e) {
+            log("[shader] reload FAILED '" + name + "': " + e.what() +
+                " (kept previous)");
+            // registerShaderFromDisk updates the watch entry before the throwing
+            // recompile only on success; bump mtimes here so we don't re-fire
+            // every tick on a persistently-broken file.
+            if (w.fragOnly) {
+                w.fragMtime = fs::last_write_time(w.full, ec);
+            } else {
+                w.vertMtime = fs::last_write_time(w.full / "scene.vert", ec);
+                ec.clear();
+                w.fragMtime = fs::last_write_time(w.full / "scene.frag", ec);
+            }
+        }
+    }
 }
 
 void EditorApp::refreshAssetTree() {

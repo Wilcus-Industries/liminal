@@ -2,12 +2,15 @@
 //
 // Everything here is built on the CPU as a flat byte buffer and uploaded
 // once. The aesthetic constraints drive the GL state:
-//   - GL_NEAREST min *and* mag, no mipmaps. Bilinear filtering (and mip
-//     trilinear) smears texels together; the PS1 sampled nearest and that
-//     hard texel edge is most of the look. A plain GL_NEAREST min filter
-//     also means we never have to call glGenerateMipmap — a texture with a
-//     mipmapping min filter but no mip levels is "incomplete" and samples
-//     black, which is a classic GL gotcha.
+//   - GL_NEAREST mag and GL_NEAREST_MIPMAP_NEAREST min — point-sampled at
+//     every stage. Bilinear/trilinear smears texels together; the PS1 sampled
+//     nearest and that hard texel edge is most of the look. The mip variant
+//     stays nearest (no bilinear) but selects a mip sized to the on-screen
+//     footprint, so minifying a large texture reads coherent texels instead
+//     of thrashing the GPU cache (was a hard FPS cliff with a plain
+//     GL_NEAREST min filter). Because the min filter samples mips,
+//     glGenerateMipmap MUST run after upload — a mipmapping min filter with
+//     no mip levels is "incomplete" and samples black, a classic GL gotcha.
 //   - Wrap mode is per-use: procedural() patterns tile across big surfaces
 //     (ground plane especially) so they use GL_REPEAT and are authored to
 //     wrap seamlessly; sprite() decals are single stamps and use
@@ -260,7 +263,12 @@ Texture Texture::uploadWH(const unsigned char* pixels, int w, int h,
     // sampler objects needed at this scale). Set it before upload out of
     // habit — order doesn't matter, but forgetting it entirely does (default
     // min filter is mipmapping, see header comment).
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    // Point-sampled mipmaps: GL_NEAREST_MIPMAP_NEAREST keeps the hard-texel
+    // (no bilinear) look while picking a mip sized to the on-screen footprint,
+    // so minifying a large texture reads coherent texels instead of thrashing
+    // the GPU cache. Still nearest, never linear (look invariant intact). Mag
+    // has no mip and stays GL_NEAREST.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
@@ -270,6 +278,9 @@ Texture Texture::uploadWH(const unsigned char* pixels, int w, int h,
     // GL_UNPACK_ALIGNMENT of 4 is safe even for odd sizes.
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+
+    // Build the mip chain the GL_NEAREST_MIPMAP_NEAREST min filter selects from.
+    glGenerateMipmap(GL_TEXTURE_2D);
 
     glBindTexture(GL_TEXTURE_2D, 0);
     return tex;

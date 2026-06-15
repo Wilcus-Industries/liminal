@@ -6,7 +6,8 @@
           "farZ": 220.0,
           "fovDeg": 70.0,
           "nearZ": 0.10000000149011612,
-          "primary": true
+          "primary": true,
+          "shaderName": "native"
         },
         "Name": {
           "value": "camera"
@@ -34,7 +35,7 @@
           ]
         }
       },
-      "id": 21
+      "id": 0
     },
     {
       "components": {
@@ -69,7 +70,7 @@
           ]
         }
       },
-      "id": 22
+      "id": 1
     },
     {
       "components": {
@@ -98,7 +99,7 @@
             0.0
           ],
           "rotationEuler": [
-            5347.8974609375,
+            0.0,
             0.0,
             0.0
           ],
@@ -109,7 +110,7 @@
           ]
         }
       },
-      "id": 23
+      "id": 2
     },
     {
       "components": {
@@ -144,7 +145,7 @@
           ]
         }
       },
-      "id": 24
+      "id": 3
     },
     {
       "components": {
@@ -184,7 +185,7 @@
           ]
         }
       },
-      "id": 25
+      "id": 4
     }
   ],
   "liminal_scene": 1

@@ -1,6 +1,7 @@
 // Generated from embedded_shaders.hpp.in by CMake — do not edit.
-// The default "retro" shader pack (assets/shaders/retro/*) embedded as raw
-// string literals so the Renderer's default ctor never touches the disk.
+// The built-in shader packs (assets/shaders/retro/* and assets/shaders/native/*)
+// embedded as raw string literals so the Renderer's default ctor never touches
+// the disk. The blit (upscale) pass is shared by both packs.
 #pragma once
 
 namespace liminal::embedded {
@@ -12,5 +13,9 @@ inline constexpr char kRetroSceneFrag[] = R"__LIMINAL__(@LIMINAL_RETRO_SCENE_FRA
 inline constexpr char kRetroBlitVert[] = R"__LIMINAL__(@LIMINAL_RETRO_BLIT_VERT@)__LIMINAL__";
 
 inline constexpr char kRetroBlitFrag[] = R"__LIMINAL__(@LIMINAL_RETRO_BLIT_FRAG@)__LIMINAL__";
+
+inline constexpr char kNativeSceneVert[] = R"__LIMINAL__(@LIMINAL_NATIVE_SCENE_VERT@)__LIMINAL__";
+
+inline constexpr char kNativeSceneFrag[] = R"__LIMINAL__(@LIMINAL_NATIVE_SCENE_FRAG@)__LIMINAL__";
 
 } // namespace liminal::embedded

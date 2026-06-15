@@ -18,6 +18,8 @@ set(LIBVTERM_SOURCES
 add_executable(liminal-editor
     main.cpp
     editor_app.cpp
+    recent_projects.cpp
+    theme.cpp
     script_editor.cpp
     lua_complete.cpp
     terminal_panel.cpp

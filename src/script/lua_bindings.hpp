@@ -34,6 +34,7 @@ sol::object pushComponent(lua_State* L, const std::string& name, void* raw);
 void bindName(void* luaState);
 void bindTransform(void* luaState);
 void bindMeshRenderer(void* luaState);
+void bindCamera(void* luaState);
 
 } // namespace luabind
 } // namespace liminal

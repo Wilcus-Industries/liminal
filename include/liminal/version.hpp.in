@@ -5,10 +5,13 @@
 #define LIMINAL_VERSION_MINOR @PROJECT_VERSION_MINOR@
 #define LIMINAL_VERSION_PATCH @PROJECT_VERSION_PATCH@
 #define LIMINAL_VERSION_STRING "@PROJECT_VERSION@"
+#define LIMINAL_GIT_COMMIT "@LIMINAL_GIT_COMMIT@"
 
 namespace liminal {
 inline constexpr int kVersionMajor = LIMINAL_VERSION_MAJOR;
 inline constexpr int kVersionMinor = LIMINAL_VERSION_MINOR;
 inline constexpr int kVersionPatch = LIMINAL_VERSION_PATCH;
 inline constexpr const char* kVersionString = LIMINAL_VERSION_STRING;
+// Short git commit hash at configure time, or "unknown" outside a git checkout.
+inline constexpr const char* kGitCommit = LIMINAL_GIT_COMMIT;
 } // namespace liminal

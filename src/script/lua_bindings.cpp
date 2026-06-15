@@ -99,6 +99,20 @@ void bindMeshRenderer(void* luaState) {
     };
 }
 
+void bindCamera(void* luaState) {
+    auto& lua = *static_cast<sol::state*>(luaState);
+    lua.new_usertype<Camera>(
+        "Camera", sol::no_constructor,
+        "fov", &Camera::fovDeg,
+        "near", &Camera::nearZ,
+        "far", &Camera::farZ,
+        "primary", &Camera::primary,
+        "shader", &Camera::shaderName);
+    pushers()["Camera"] = [](lua_State* L, void* raw) {
+        return sol::make_object(L, static_cast<Camera*>(raw));
+    };
+}
+
 // --- core API ----------------------------------------------------------------
 
 namespace {

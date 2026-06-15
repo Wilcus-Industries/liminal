@@ -62,11 +62,13 @@ glm::mat4 App::primaryCameraView() {
         if (found || !c.primary) return;
         found = true;
         m_renderer->settings.fovDegrees = c.fovDeg;
+        m_renderer->useShaderPack(c.shaderName);
         view = glm::inverse(t.matrix());
     });
     if (!found) {
         // No camera in the scene: a sane default so "create a box and run"
         // shows something.
+        m_renderer->useShaderPack("native");
         view = glm::lookAt(glm::vec3(0.0f, 2.0f, 5.0f), glm::vec3(0.0f),
                            glm::vec3(0.0f, 1.0f, 0.0f));
     }
@@ -116,7 +118,12 @@ void App::run(const std::function<void(Frame&)>& frameFn) {
             if (sources > 0) m_audio->params.enabled = applied;
         }
 
-        m_renderer->beginFrame(primaryCameraView());
+        // primaryCameraView() mutates renderer settings (fov, shader pack), so
+        // it must run before beginFrame.
+        const glm::mat4 view = primaryCameraView();
+        int fbw = 0, fbh = 0;
+        m_window->framebufferSize(fbw, fbh);
+        m_renderer->beginFrame(view, fbw, fbh);
 
         if (frameFn) {
             Frame frame{dt,        now,        *m_window, m_scene,
@@ -148,8 +155,6 @@ void App::run(const std::function<void(Frame&)>& frameFn) {
             }
         }
 
-        int fbw = 0, fbh = 0;
-        m_window->framebufferSize(fbw, fbh);
         m_renderer->endFrame(fbw, fbh);
 
         m_imgui->endFrame();

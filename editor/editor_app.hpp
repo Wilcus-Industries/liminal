@@ -12,6 +12,7 @@
 //          components, the scene's primary Camera drives the viewport
 //          (editor cam fallback). Stop restores the snapshot exactly.
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -30,6 +31,9 @@
 #include "script_editor.hpp"
 #include "terminal_panel.hpp"
 #include "mcp_server.hpp"
+#include "recent_projects.hpp"
+
+struct ImFont;
 
 namespace liminal { class Audio; }
 #if defined(LIMINAL_WITH_INFERENCE)
@@ -40,18 +44,37 @@ namespace liminal::editor {
 
 class EditorApp {
 public:
-    // projectFile may be empty (editor opens with an empty scene, no project).
-    explicit EditorApp(std::string projectFile);
+    // projectFile non-empty: open it and go straight to the editor. Empty +
+    // startEmpty: skip the landing screen and open the editor on a blank scene
+    // (the --empty CLI path). Empty + !startEmpty: show the landing / project
+    // chooser screen (the default no-arg launch).
+    explicit EditorApp(std::string projectFile, bool startEmpty = false);
     ~EditorApp(); // out-of-line: m_audio holds an incomplete Audio
     void run();
 
 private:
     enum class Mode { Edit, Play };
+    // Landing = the JetBrains-style project chooser shown before any project is
+    // open; Editor = the dockspace. openProject success flips Landing -> Editor.
+    enum class Screen { Landing, Editor };
 
     // --- frame stages ---
     void renderScene();           // each<Transform, MeshRenderer> -> DrawItem
     glm::mat4 currentView();      // editor cam, or primary Camera in Play
     void drawUi();
+    // The landing / project chooser (Screen::Landing). Full-window: LIMINAL
+    // watermark + action buttons + repo/version footer on the left, recent
+    // projects on the right. Hosts the "Create Project" modal.
+    void drawLanding();
+    // Scaffold a new project under parentDir/name: project.ljson + a default
+    // scenes/main.lscene (primary camera + cube + light), then openProject it.
+    // Logs + non-fatal on filesystem errors.
+    void createProject(const std::string& parentDir, const std::string& name);
+
+    // --- theming ---
+    // The single seam for switching ImGui themes. Both the Theme menu and any
+    // future settings window call only this; unknown names are a no-op + log.
+    void applyTheme(const std::string& name);
 
     // --- panels ---
     void drawMenuBar();
@@ -66,6 +89,12 @@ private:
 
     // --- viewport helpers ---
     void handleCameraInput(bool viewportHovered);
+    // During Play (not paused, cursor not script-captured) clamp the OS cursor
+    // to the Viewport window rect so clicks can't leak onto other editor panels.
+    // No-op in Edit, while paused, or when a script has the cursor captured
+    // (GLFW_CURSOR_DISABLED already locks it). Uses m_viewportRect*, set by
+    // drawViewport; single OS window so ImGui screen coords == GLFW cursor coords.
+    void confineCursorToViewport();
     void pickEntity(const glm::vec2& uv); // uv in [0,1] over the image
     // Returns true only when ImGuizmo::Manipulate ran this frame (IsOver/
     // IsUsing are stale otherwise).
@@ -73,6 +102,11 @@ private:
 
     // --- commands ---
     void openProject(const std::string& projectFile);
+    // Tear down the open project (MCP server, terminal, script editor, scene,
+    // project/shader state) and return to the landing chooser. Does not save —
+    // the File-menu caller gates this behind a discard-confirm when any script
+    // tab is dirty (the editor has no scene-dirty tracking).
+    void closeProject();
     void newScene();
     void openScene(const std::string& path); // resolved via Assets
     bool saveScene(const std::string& path);
@@ -95,6 +129,22 @@ private:
     // Seed the canonical liminal-lua Claude Code skill into the opened
     // project's .claude/skills/ if absent (never overwrites a customized one).
     void seedLuaSkill();
+
+    // Scan <projectDir>/shaders/ and register each discovered shader as a pack,
+    // then rebuild shaderCatalog() = {"native","retro", <discovered...>}. A
+    // subdir with scene.vert+scene.frag is a full pack; a lone *.frag is wrapped
+    // (engine vertex + boilerplate). Records each file's mtime for hot reload.
+    void scanShaders();
+    // Build (or rebuild) a single pack from a discovered shader source on disk.
+    // Throws std::runtime_error if a required file cannot be read; the caller
+    // logs + skips. Records mtimes into m_shaderWatch under name.
+    void registerShaderFromDisk(const std::string& name,
+                                const std::filesystem::path& full,
+                                bool fragOnly);
+    // Throttled (~0.5s) mtime poll of discovered shader files; re-registers a
+    // pack whose source changed (recompiles immediately if active). Compile
+    // failures are caught + logged, keeping the previous good pack.
+    void tickShaderWatch();
 
     // Resolves "123" (entt id) or a Name to an entity; entt::null if not found.
     // Used by the MCP get/set/remove/destroy entity tools (main thread only).
@@ -143,6 +193,7 @@ private:
     float m_camYaw = -147.0f;  // degrees; -Z at yaw 180
     float m_camPitch = -18.0f; // degrees
     float m_camSpeed = 6.0f;
+    float m_camSpeedHud = 0.0f; // seconds left on the scroll-to-adjust speed HUD
 
     // --- play mode ---
     Mode m_mode = Mode::Edit;
@@ -150,9 +201,21 @@ private:
     nlohmann::json m_playSnapshot;
 
     // --- per-frame state the panels share ---
+    // Viewport window rect in ImGui screen coords, refreshed each frame by
+    // drawViewport; max <= min means "not drawn this frame" (skip confine).
+    float m_viewportMinX = 0.0f, m_viewportMinY = 0.0f;
+    float m_viewportMaxX = 0.0f, m_viewportMaxY = 0.0f;
     float m_dt = 0.0f;
     glm::mat4 m_view{1.0f};
     glm::mat4 m_proj{1.0f};
+
+    // --- landing screen ---
+    Screen m_screen = Screen::Landing; // start on the chooser unless a project opens
+    ImFont* m_titleFont = nullptr;     // larger JetBrains Mono face for "LIMINAL"
+    std::vector<RecentProject> m_recents; // loaded once for the landing list
+
+    // --- theming ---
+    std::string m_themeName = "Liminal"; // active ImGui theme; default Liminal
 
     // --- console ---
     std::vector<std::string> m_console;
@@ -168,10 +231,24 @@ private:
     FsEntry m_assetTree;
     std::string m_browserStatus; // e.g. last clicked .lua
 
+    // --- custom shader discovery + hot reload ---
+    // One discovered pack: the source file(s) on disk and their last-seen
+    // mtimes. fragOnly => `full` is a *.frag wrapped by the engine; otherwise
+    // `full` is a subdir holding scene.vert + scene.frag.
+    struct ShaderWatch {
+        std::filesystem::path full; // *.frag file (fragOnly) or pack subdir
+        bool fragOnly = false;
+        std::filesystem::file_time_type vertMtime{}; // unused when fragOnly
+        std::filesystem::file_time_type fragMtime{};
+    };
+    std::vector<std::pair<std::string, ShaderWatch>> m_shaderWatch; // name -> src
+    float m_shaderReloadTimer = 0.0f; // throttles the mtime poll (~0.5s)
+
     // --- modal path buffers ---
     char m_projectPathBuf[512] = {};
     char m_scenePathBuf[512] = {};
     char m_buildPathBuf[512] = {};
+    char m_newProjectNameBuf[256] = {}; // Create Project modal: project name
 };
 
 } // namespace liminal::editor
