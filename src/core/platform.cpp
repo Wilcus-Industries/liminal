@@ -10,6 +10,7 @@
 #include <windows.h>
 #include <vector>
 #elif defined(__APPLE__)
+#include <climits> // PATH_MAX
 #include <mach-o/dyld.h>
 #include <vector>
 #else

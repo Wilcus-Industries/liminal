@@ -40,7 +40,8 @@ Pty::~Pty() {}
 Pty::Pty(Pty&&) noexcept {}
 Pty& Pty::operator=(Pty&&) noexcept { return *this; }
 
-bool Pty::spawn(const std::string&, const std::vector<std::string>&, int, int) {
+bool Pty::spawn(const std::string&, const std::vector<std::string>&, int, int,
+                const std::string&) {
     return false; // ConPTY not yet implemented
 }
 long Pty::read(std::vector<unsigned char>&) { return -1; }
