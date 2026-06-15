@@ -371,7 +371,9 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
     const ImU32 selBg = IM_COL32(80, 130, 200, 110);
 
     char utf8[8];
-    auto drawCellGlyph = [&](float x, float y, uint32_t cp) {
+    // Encodes a codepoint into the shared utf8[] buffer; the caller draws it
+    // with dl->AddText. (Encode-only — the cell position is the caller's.)
+    auto encodeCellGlyph = [&](uint32_t cp) {
         if (cp == 0 || cp == ' ') return;
         // Encode the codepoint to UTF-8 for ImGui's text draw.
         int n = 0;
@@ -414,7 +416,7 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
                 dl->AddRectFilled(ImVec2(x, y), ImVec2(x + cellW, y + cellH), selBg);
             const uint32_t cp = line.chars[size_t(c)];
             if (cp && cp != ' ') {
-                drawCellGlyph(x, y, cp);
+                encodeCellGlyph(cp);
                 dl->AddText(font, fontSize, ImVec2(x, y), line.fg[size_t(c)], utf8);
             }
         }
@@ -441,7 +443,7 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
                 dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + cellH), selBg);
             const uint32_t cp = cell.chars[0];
             if (cp && cp != ' ') {
-                drawCellGlyph(x, y, cp);
+                encodeCellGlyph(cp);
                 dl->AddText(font, fontSize, ImVec2(x, y), fgCol, utf8);
             }
         }
@@ -466,7 +468,7 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
                 if (vterm_screen_get_cell(m_screen, cur, &cell)) {
                     const uint32_t cp = cell.chars[0];
                     if (cp && cp != ' ') {
-                        drawCellGlyph(x, y, cp);
+                        encodeCellGlyph(cp);
                         dl->AddText(font, fontSize, ImVec2(x, y),
                                     packRGB(18, 18, 22), utf8);
                     }

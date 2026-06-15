@@ -311,7 +311,7 @@ void bindUsertypes(sol::state& lua) {
 
 // --- functions ---------------------------------------------------------------
 
-void bindFunctions(sol::table& procgen, sol::state& lua) {
+void bindFunctions(sol::table& procgen, sol::state& /*lua*/) {
     procgen["rng"] = [](std::uint32_t seed) { return pg::Rng(seed); };
 
     procgen["tileset"] = [](sol::optional<std::string> jsonPath) {
