@@ -252,9 +252,31 @@ void TerminalPanel::handleInput() {
     if ((io.KeySuper || io.KeyCtrl) && ImGui::IsKeyPressed(ImGuiKey_V, false)) {
         if (const char* clip = ImGui::GetClipboardText()) {
             vterm_keyboard_start_paste(m_vt);
-            for (const char* p = clip; *p; ++p)
-                vterm_keyboard_unichar(m_vt, uint32_t((unsigned char)*p),
-                                       VTERM_MOD_NONE);
+            // Decode UTF-8 to code points before feeding vterm_keyboard_unichar:
+            // with VTERM_MOD_NONE libvterm re-encodes its argument AS a code
+            // point, so passing raw bytes would turn each multibyte lead/cont
+            // byte into its own (wrong) character. ASCII is unaffected.
+            for (const char* p = clip; *p;) {
+                unsigned char c = static_cast<unsigned char>(*p);
+                uint32_t cp;
+                int len;
+                if (c < 0x80) { cp = c; len = 1; }
+                else if ((c >> 5) == 0x6) { cp = c & 0x1Fu; len = 2; }
+                else if ((c >> 4) == 0xE) { cp = c & 0x0Fu; len = 3; }
+                else if ((c >> 3) == 0x1E) { cp = c & 0x07u; len = 4; }
+                else { ++p; continue; } // stray continuation / invalid lead
+                bool ok = true;
+                for (int i = 1; i < len; ++i) {
+                    if ((static_cast<unsigned char>(p[i]) & 0xC0u) != 0x80u) {
+                        ok = false; // truncated (incl. NUL) or malformed
+                        break;
+                    }
+                    cp = (cp << 6) | (static_cast<unsigned char>(p[i]) & 0x3Fu);
+                }
+                if (!ok) { ++p; continue; }
+                vterm_keyboard_unichar(m_vt, cp, VTERM_MOD_NONE);
+                p += len;
+            }
             vterm_keyboard_end_paste(m_vt);
         }
     } else {

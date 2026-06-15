@@ -642,7 +642,11 @@ void Audio::Impl::dataCallback(ma_device* pDevice, void* pOutput, const void* /*
         // delay, so retriggering the same voice never cuts anything off. The
         // foot alternation is deliberately untouched — your own gait stays
         // honest; only the extra step is wrong. ---
-        if (enabled && self->echoCountdown >= 0 && --self->echoCountdown < 0) {
+        // Advance the countdown whether or not audio is enabled, so an echo
+        // armed before a disable doesn't freeze and re-fire on re-enable (the
+        // step/jump/mumble/creak triggers drop queued events the same way).
+        // Only emit the echo when enabled and the countdown elapses.
+        if (self->echoCountdown >= 0 && --self->echoCountdown < 0 && enabled) {
             self->stepKnockHz = self->echoHz;
             self->stepKnockPhase = 0.0f;
             self->stepKnockEnv = 0.9f;

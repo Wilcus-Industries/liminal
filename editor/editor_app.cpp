@@ -1058,6 +1058,12 @@ void EditorApp::drawViewport() {
 }
 
 void EditorApp::handleCameraInput(bool viewportHovered) {
+    // Drain the accumulated wheel delta every frame, before any early-return.
+    // scrollDelta() zeroes-on-read, so leaving it un-drained during Play or
+    // while the cursor is over another panel buffers that scroll and dumps it
+    // as a sudden camera-speed jump the next time the viewport is hovered.
+    const float scroll = m_window.scrollDelta();
+
     // Play: scripts own the cursor/camera (like the standalone player) — don't
     // stomp a script-driven setCursorCaptured. RMB-fly is an Edit-mode tool.
     if (m_mode != Mode::Edit) return;
@@ -1065,10 +1071,9 @@ void EditorApp::handleCameraInput(bool viewportHovered) {
 
     // Scroll adjusts fly speed whenever the viewport is hovered (no RMB needed),
     // and also while actively flying (capture hides the cursor so hover reads
-    // false). Read here, before the not-flying early-return, so a plain scroll
-    // over the viewport tweaks speed + shows the HUD.
+    // false). Apply only when the viewport is the intended target so the drained
+    // value tweaks speed + shows the HUD; stale scroll from elsewhere is dropped.
     if (viewportHovered || m_window.cursorCaptured()) {
-        const float scroll = m_window.scrollDelta();
         if (scroll != 0.0f) {
             m_camSpeed =
                 std::clamp(m_camSpeed * (1.0f + scroll * 0.12f), 0.5f, 60.0f);

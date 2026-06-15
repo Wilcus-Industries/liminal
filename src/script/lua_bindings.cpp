@@ -267,7 +267,13 @@ void bindAudio(sol::table& lm, sol::state& lua, ScriptHost& host) {
             return;
         }
         if (auto it = audioInts().find(name); it != audioInts().end()) {
-            (p.*(it->second)).store(value.is<int>() ? value.as<int>() : 0);
+            // Accept the double subtype too: a Lua literal like 2.0 reports
+            // is<int>()==false and would otherwise silently store 0. Matches
+            // the dual-subtype convention used by the seed read and procgen.
+            (p.*(it->second))
+                .store(value.is<int>() ? value.as<int>()
+                       : value.is<double>() ? int(value.as<double>())
+                                            : 0);
             return;
         }
         if (name == "enabled") {
