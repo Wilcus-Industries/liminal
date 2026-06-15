@@ -16,8 +16,20 @@
 #include <sstream>
 #include <vector>
 
+// stb_image_write's implementation trips -Wextra (missing-field-initializers)
+// and -Wdeprecated-declarations (sprintf) — it is vendored third-party code, so
+// silence those around just this include while keeping the warnings on our own
+// sources in this TU.
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include <stb_image_write.h>
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 namespace fs = std::filesystem;
 

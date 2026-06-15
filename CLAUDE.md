@@ -27,6 +27,8 @@ CMake options (root `CMakeLists.txt`):
 
 No install/export rules — liminal is no longer a `find_package` consumable; the lib is internal to the editor/player builds.
 
+First-party translation units compile with `-Wall -Wextra` (the `LIMINAL_WARNING_FLAGS` var, applied target-wide to the lib/player/tests and source-scoped to the editor's own `.cpp` files so the in-tree vendored sources — ImGui, ImGuizmo, ImGuiColorTextEdit, libvterm, stb, miniaudio, glad — stay unwarned). The build also adds `-Wl,-no_warn_duplicate_libraries` when `CheckLinkerFlag` confirms support (silences the harmless duplicate-`libglfw3.a` warning from newer macOS ld).
+
 Dependencies fetched via `cmake/Dependencies.cmake` (FetchContent): GLFW, glad, glm, entt, Dear ImGui, miniaudio, stb, nlohmann/json, sol2+Lua, llama.cpp, ImGuizmo, ImGuiColorTextEdit (BalazsJako, editor-only, compiled into the editor like ImGuizmo), libvterm (neovim mirror, editor-only; plain C core `src/*.c` + `include/vterm.h`, no usable CMake so the `.c` files compile straight into liminal-editor like ImGuizmo — include both `include/` and `src/`; pinned commit `934bc2fbf21800ac3458a499df8820ca5fb45fd3`), cpp-httplib (yhirose, editor-only, header-only; INTERFACE target `httplib::httplib` carries the include dir + Threads dep — backs the editor's MCP server; plaintext localhost only, OpenSSL/zlib/brotli forced off; pinned `v0.18.3`), JetBrains Mono (editor-only; plain TTF zip, path exported as `LIMINAL_JETBRAINS_MONO_TTF`).
 
 ## Structure
@@ -83,7 +85,8 @@ src/
              color FBO back to RGBA8 bottom-up — backs the MCP screenshot tool),
              Shader (throws on compile/link
              fail), Mesh (interleaved pos|normal|uv, flat-shaded, no index buffer,
-             procedural primitives), Texture (procedural RGBA8 + stb_image
+             procedural primitives; shares the deterministic hashU32 noise
+             primitive with Texture via render/hash_detail.hpp), Texture (procedural RGBA8 + stb_image
              decoding PNG/JPEG/TGA/BMP — the formats buildGamePak ships; nearest
              filtering is load-bearing for the retro look. Min filter is
              GL_NEAREST_MIPMAP_NEAREST + glGenerateMipmap after upload (mag
@@ -130,7 +133,9 @@ src/
   procgen/   rng (deterministic xorshift32, per-stage salted seeding), types (plain
              structs between stages), wfc (tiled-model WFC, weighted picks, restart on
              contradiction with seed+1), tileset (JSON overlay on compiled-in fallback),
-             terrain/terrain_field (value noise, quantized, water/void masks),
+             terrain/terrain_field (value noise, quantized, water/void masks;
+             shared hashU32/valueNoise/smoothstep helpers in procgen/noise_detail.hpp,
+             included by terrain/terrain_field/structure),
              shape_grammar (footprints → boxy buildings/decks/piers), structure
              (parameterized landmarks), layout_validator (flood-fill reachability,
              unconditional repair, never fails — reports repair cost)
@@ -270,9 +275,11 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              default 200 → tail of m_console as {lines:[...]}), play_state (no input →
              {mode:"edit|play", paused:bool}), screenshot (no input → an MCP image
              content block {type:"image", data:<base64 PNG>, mimeType:"image/png"};
-             base64 PNG of the low-res FBO via Renderer::readPixels + stb_image_write,
-             row-flipped to top-down, 1 frame stale since pump() runs before the frame
-             renders; returns a text error block "no framebuffer" if no FBO).
+             base64 PNG of the scene FBO (window resolution for the default native
+             pack, the virtual low-res FBO for retro) via Renderer::readPixels +
+             stb_image_write, row-flipped to top-down, 1 frame stale since pump()
+             runs before the frame renders; returns a text error block
+             "no framebuffer" if no FBO).
              Control tools (via McpProvider control/reloadScene/saveScene getters):
              play_game (no input → startPlay, returns {mode,paused}), pause_game
              (input {paused?:boolean} default true → pause/resume, errors if not
@@ -357,7 +364,7 @@ cmake/
 - `.lscene` entity IDs are debugging-only; never written code may rely on them surviving a load.
 - Lua `get_component` returns raw entt pointers valid only within the frame (entt structural changes invalidate); don't cache them across frames in scripts.
 - Audio: game thread must only touch atomics; DSP belongs in the miniaudio callback.
-- Renderer look depends on nearest-neighbor filtering and low-res FBO — don't "fix" to linear.
+- The retro pack depends on nearest-neighbor texture filtering and its low-res FBO — don't "fix" either to linear/high-res. (The default native pack renders into a window-resolution FBO; nearest texture filtering still applies engine-wide.)
 - Scripting (Lua 5.4 + sol2) is always compiled in — no flag. Inference and the editor are optional via CMake flags; keep new inference/editor code gated accordingly (`#if defined(LIMINAL_WITH_INFERENCE)` blocks in `app.hpp` follow this pattern).
 
 ## Known issues / accepted limitations
