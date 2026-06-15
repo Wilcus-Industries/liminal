@@ -28,6 +28,21 @@ ComponentRegistry& ComponentRegistry::instance() {
     return registry;
 }
 
+namespace {
+// ImGui InputText bound to a std::string via a fixed stack buffer. Shared by the
+// component inspectors so the buffer size stays consistent across fields (one
+// site previously used a shorter 64-byte buffer).
+bool inputTextString(const char* label, std::string& s) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "%s", s.c_str());
+    if (ImGui::InputText(label, buf, sizeof(buf))) {
+        s = buf;
+        return true;
+    }
+    return false;
+}
+} // namespace
+
 void ComponentRegistry::registerOps(ComponentOps ops) {
     for (auto& existing : m_ops) {
         if (existing.name == ops.name) {
@@ -55,11 +70,7 @@ void registerName(ComponentRegistry& r) {
         "Name",
         [](const Name& c) { return nlohmann::json{{"value", c.value}}; },
         [](Name& c, const nlohmann::json& j) { c.value = j.value("value", ""); },
-        [](Name& c) {
-            char buf[256];
-            std::snprintf(buf, sizeof(buf), "%s", c.value.c_str());
-            if (ImGui::InputText("name", buf, sizeof(buf))) c.value = buf;
-        },
+        [](Name& c) { inputTextString("name", c.value); },
         LIMINAL_LUABIND(bindName));
 }
 
@@ -98,11 +109,8 @@ void registerMeshRenderer(ComponentRegistry& r) {
             c.textureAsset = j.value("textureAsset", "");
         },
         [](MeshRenderer& c) {
-            char buf[256];
-            std::snprintf(buf, sizeof(buf), "%s", c.meshAsset.c_str());
-            if (ImGui::InputText("mesh", buf, sizeof(buf))) c.meshAsset = buf;
-            std::snprintf(buf, sizeof(buf), "%s", c.textureAsset.c_str());
-            if (ImGui::InputText("texture", buf, sizeof(buf))) c.textureAsset = buf;
+            inputTextString("mesh", c.meshAsset);
+            inputTextString("texture", c.textureAsset);
             ImGui::ColorEdit4("color", &c.color.x);
         },
         LIMINAL_LUABIND(bindMeshRenderer));
@@ -143,9 +151,7 @@ void registerCamera(ComponentRegistry& r) {
             } else {
                 // Headless / catalog not populated: free-text fallback so the
                 // field is still editable and round-trips.
-                char buf[64];
-                std::snprintf(buf, sizeof(buf), "%s", c.shaderName.c_str());
-                if (ImGui::InputText("shader", buf, sizeof(buf))) c.shaderName = buf;
+                inputTextString("shader", c.shaderName);
             }
         },
         LIMINAL_LUABIND(bindCamera));
@@ -202,9 +208,7 @@ void registerScript(ComponentRegistry& r) {
             int removeIdx = -1;
             for (std::size_t i = 0; i < c.paths.size(); ++i) {
                 ImGui::PushID(static_cast<int>(i));
-                char buf[256];
-                std::snprintf(buf, sizeof(buf), "%s", c.paths[i].c_str());
-                if (ImGui::InputText("path", buf, sizeof(buf))) c.paths[i] = buf;
+                inputTextString("path", c.paths[i]);
                 ImGui::SameLine();
                 if (ImGui::Button("X")) removeIdx = static_cast<int>(i);
                 ImGui::PopID();

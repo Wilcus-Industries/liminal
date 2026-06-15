@@ -6,6 +6,8 @@
 
 #include <liminal/procgen/terrain.hpp>
 
+#include "noise_detail.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -14,32 +16,10 @@ namespace liminal::procgen {
 
 namespace {
 
-std::uint32_t hashU32(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
-
-float hash01(std::uint32_t seed, int ix, int iz) {
-    std::uint32_t h = hashU32(static_cast<std::uint32_t>(ix) * 0x9E3779B9U ^
-                              hashU32(static_cast<std::uint32_t>(iz) * 0x85EBCA6BU ^ seed));
-    return static_cast<float>(h & 0x00FFFFFFU) / 16777216.0f;
-}
-
-float valueNoise(std::uint32_t seed, float x, float z, float freq) {
-    const float fx = x * freq, fz = z * freq;
-    const int ix = static_cast<int>(std::floor(fx));
-    const int iz = static_cast<int>(std::floor(fz));
-    float tx = fx - ix, tz = fz - iz;
-    tx = tx * tx * (3.0f - 2.0f * tx);
-    tz = tz * tz * (3.0f - 2.0f * tz);
-    const float a = hash01(seed, ix, iz),     b = hash01(seed, ix + 1, iz);
-    const float c = hash01(seed, ix, iz + 1), d = hash01(seed, ix + 1, iz + 1);
-    return (a + (b - a) * tx) * (1.0f - tz) + (c + (d - c) * tx) * tz;
-}
+using detail::hash01;
+using detail::hashU32;
+using detail::smoothstep01;
+using detail::valueNoise;
 
 float fbm(std::uint32_t seed, float x, float z, float freq, int octaves) {
     float sum = 0.0f, amp = 1.0f, norm = 0.0f, f = freq;
@@ -52,11 +32,6 @@ float fbm(std::uint32_t seed, float x, float z, float freq, int octaves) {
         s ^= 0x5bd1e995U + (s << 6);
     }
     return sum / norm; // 0..1-ish
-}
-
-float smoothstep01(float t) {
-    t = std::clamp(t, 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
 }
 
 // The chunk size of the world. Bilinear sampling between nodes still slopes,

@@ -18,7 +18,9 @@ struct Theme {
     std::function<void(ImGuiStyle&)> apply;
 };
 
-// Built-in themes in stable display order. First entry ("Dark") is the default.
+// Built-in themes in stable display order (Dark, Light, Liminal, High Contrast).
+// This is display order only — the registry does not pick a default; EditorApp
+// chooses the active theme at startup (currently "Liminal", editor_app.hpp).
 const std::vector<Theme>& registry();
 
 // Lookup by name; nullptr if unknown.

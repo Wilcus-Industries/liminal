@@ -16,8 +16,20 @@
 #include <sstream>
 #include <vector>
 
+// stb_image_write's implementation trips -Wextra (missing-field-initializers)
+// and -Wdeprecated-declarations (sprintf) — it is vendored third-party code, so
+// silence those around just this include while keeping the warnings on our own
+// sources in this TU.
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include <stb_image_write.h>
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 namespace fs = std::filesystem;
 
@@ -335,6 +347,16 @@ nlohmann::json McpServer::marshal(std::function<nlohmann::json()> fn,
     return fut.get();
 }
 
+nlohmann::json McpServer::marshalText(std::function<nlohmann::json()> fn,
+                                      int indent) {
+    static const nlohmann::json timeoutResult =
+        textResult("{\"error\":\"editor did not respond (main thread busy)\"}");
+    nlohmann::json out = marshal(std::move(fn), timeoutResult);
+    // The timeout envelope is already an MCP content block; pass it through.
+    if (out.is_object() && out.contains("content")) return out;
+    return textResult(out.dump(indent));
+}
+
 nlohmann::json McpServer::handleRpc(const nlohmann::json& req) {
     // Batch requests are not used by Claude Code's http transport here; handle
     // the single-object shape.
@@ -375,14 +397,12 @@ nlohmann::json McpServer::callTool(const std::string& name,
         textResult("{\"error\":\"editor did not respond (main thread busy)\"}");
 
     if (name == "scene_tree") {
-        nlohmann::json tree = marshal(
+        return marshalText(
             [this]() -> nlohmann::json {
                 return m_provider.sceneTree ? m_provider.sceneTree()
                                             : nlohmann::json::object();
             },
-            timeoutResult);
-        if (tree.is_object() && tree.contains("content")) return tree; // timeout
-        return textResult(tree.dump(2));
+            2);
     }
 
     if (name == "get_entity") {
@@ -400,14 +420,12 @@ nlohmann::json McpServer::callTool(const std::string& name,
     }
 
     if (name == "current_project") {
-        nlohmann::json proj = marshal(
+        return marshalText(
             [this]() -> nlohmann::json {
                 return m_provider.currentProject ? m_provider.currentProject()
                                                  : nlohmann::json::object();
             },
-            timeoutResult);
-        if (proj.is_object() && proj.contains("content")) return proj; // timeout
-        return textResult(proj.dump(2));
+            2);
     }
 
     if (name == "list_scripts") {
@@ -482,26 +500,22 @@ nlohmann::json McpServer::callTool(const std::string& name,
 
     if (name == "console_log") {
         const int lines = args.value("lines", 200);
-        nlohmann::json log = marshal(
+        return marshalText(
             [this, lines]() -> nlohmann::json {
                 return m_provider.consoleLog
                            ? m_provider.consoleLog(lines)
                            : nlohmann::json{{"lines", nlohmann::json::array()}};
             },
-            timeoutResult);
-        if (log.is_object() && log.contains("content")) return log; // timeout
-        return textResult(log.dump(2));
+            2);
     }
 
     if (name == "play_state") {
-        nlohmann::json state = marshal(
+        return marshalText(
             [this]() -> nlohmann::json {
                 return m_provider.playState ? m_provider.playState()
                                             : nlohmann::json::object();
             },
-            timeoutResult);
-        if (state.is_object() && state.contains("content")) return state; // timeout
-        return textResult(state.dump(2));
+            2);
     }
 
     if (name == "screenshot") {
@@ -526,65 +540,45 @@ nlohmann::json McpServer::callTool(const std::string& name,
     }
 
     if (name == "play_game") {
-        nlohmann::json state = marshal(
-            [this]() -> nlohmann::json {
-                return m_provider.control
-                           ? m_provider.control("play")
-                           : nlohmann::json{{"error", "control unavailable"}};
-            },
-            timeoutResult);
-        if (state.is_object() && state.contains("content")) return state; // timeout
-        return textResult(state.dump());
+        return marshalText([this]() -> nlohmann::json {
+            return m_provider.control
+                       ? m_provider.control("play")
+                       : nlohmann::json{{"error", "control unavailable"}};
+        });
     }
 
     if (name == "stop_game") {
-        nlohmann::json state = marshal(
-            [this]() -> nlohmann::json {
-                return m_provider.control
-                           ? m_provider.control("stop")
-                           : nlohmann::json{{"error", "control unavailable"}};
-            },
-            timeoutResult);
-        if (state.is_object() && state.contains("content")) return state; // timeout
-        return textResult(state.dump());
+        return marshalText([this]() -> nlohmann::json {
+            return m_provider.control
+                       ? m_provider.control("stop")
+                       : nlohmann::json{{"error", "control unavailable"}};
+        });
     }
 
     if (name == "pause_game") {
         const bool paused = args.value("paused", true);
-        nlohmann::json state = marshal(
-            [this, paused]() -> nlohmann::json {
-                if (!m_provider.control)
-                    return nlohmann::json{{"error", "control unavailable"}};
-                return m_provider.control(paused ? "pause" : "resume");
-            },
-            timeoutResult);
-        if (state.is_object() && state.contains("content")) return state; // timeout
-        return textResult(state.dump());
+        return marshalText([this, paused]() -> nlohmann::json {
+            if (!m_provider.control)
+                return nlohmann::json{{"error", "control unavailable"}};
+            return m_provider.control(paused ? "pause" : "resume");
+        });
     }
 
     if (name == "reload_scene") {
-        nlohmann::json res = marshal(
-            [this]() -> nlohmann::json {
-                return m_provider.reloadScene
-                           ? m_provider.reloadScene()
-                           : nlohmann::json{{"error", "reload unavailable"}};
-            },
-            timeoutResult);
-        if (res.is_object() && res.contains("content")) return res; // timeout
-        return textResult(res.dump());
+        return marshalText([this]() -> nlohmann::json {
+            return m_provider.reloadScene
+                       ? m_provider.reloadScene()
+                       : nlohmann::json{{"error", "reload unavailable"}};
+        });
     }
 
     if (name == "save_scene") {
         const std::string path = args.value("path", std::string{});
-        nlohmann::json res = marshal(
-            [this, path]() -> nlohmann::json {
-                return m_provider.saveScene
-                           ? m_provider.saveScene(path)
-                           : nlohmann::json{{"error", "save unavailable"}};
-            },
-            timeoutResult);
-        if (res.is_object() && res.contains("content")) return res; // timeout
-        return textResult(res.dump());
+        return marshalText([this, path]() -> nlohmann::json {
+            return m_provider.saveScene
+                       ? m_provider.saveScene(path)
+                       : nlohmann::json{{"error", "save unavailable"}};
+        });
     }
 
     if (name == "set_component") {
@@ -594,15 +588,11 @@ nlohmann::json McpServer::callTool(const std::string& name,
             return textResult(
                 "{\"error\":\"set_component requires 'id' and 'component'\"}");
         const nlohmann::json data = args.value("data", nlohmann::json::object());
-        nlohmann::json res = marshal(
-            [this, id, comp, data]() -> nlohmann::json {
-                return m_provider.setComponent
-                           ? m_provider.setComponent(id, comp, data)
-                           : nlohmann::json{{"error", "setComponent unavailable"}};
-            },
-            timeoutResult);
-        if (res.is_object() && res.contains("content")) return res; // timeout
-        return textResult(res.dump());
+        return marshalText([this, id, comp, data]() -> nlohmann::json {
+            return m_provider.setComponent
+                       ? m_provider.setComponent(id, comp, data)
+                       : nlohmann::json{{"error", "setComponent unavailable"}};
+        });
     }
 
     if (name == "remove_component") {
@@ -611,45 +601,31 @@ nlohmann::json McpServer::callTool(const std::string& name,
         if (id.empty() || comp.empty())
             return textResult(
                 "{\"error\":\"remove_component requires 'id' and 'component'\"}");
-        nlohmann::json res = marshal(
-            [this, id, comp]() -> nlohmann::json {
-                return m_provider.removeComponent
-                           ? m_provider.removeComponent(id, comp)
-                           : nlohmann::json{{"error",
-                                             "removeComponent unavailable"}};
-            },
-            timeoutResult);
-        if (res.is_object() && res.contains("content")) return res; // timeout
-        return textResult(res.dump());
+        return marshalText([this, id, comp]() -> nlohmann::json {
+            return m_provider.removeComponent
+                       ? m_provider.removeComponent(id, comp)
+                       : nlohmann::json{{"error", "removeComponent unavailable"}};
+        });
     }
 
     if (name == "create_entity") {
         const std::string entName = args.value("name", std::string{});
-        nlohmann::json res = marshal(
-            [this, entName]() -> nlohmann::json {
-                return m_provider.createEntity
-                           ? m_provider.createEntity(entName)
-                           : nlohmann::json{{"error", "createEntity unavailable"}};
-            },
-            timeoutResult);
-        if (res.is_object() && res.contains("content")) return res; // timeout
-        return textResult(res.dump());
+        return marshalText([this, entName]() -> nlohmann::json {
+            return m_provider.createEntity
+                       ? m_provider.createEntity(entName)
+                       : nlohmann::json{{"error", "createEntity unavailable"}};
+        });
     }
 
     if (name == "destroy_entity") {
         const std::string id = args.value("id", std::string{});
         if (id.empty())
             return textResult("{\"error\":\"destroy_entity requires 'id'\"}");
-        nlohmann::json res = marshal(
-            [this, id]() -> nlohmann::json {
-                return m_provider.destroyEntity
-                           ? m_provider.destroyEntity(id)
-                           : nlohmann::json{{"error",
-                                             "destroyEntity unavailable"}};
-            },
-            timeoutResult);
-        if (res.is_object() && res.contains("content")) return res; // timeout
-        return textResult(res.dump());
+        return marshalText([this, id]() -> nlohmann::json {
+            return m_provider.destroyEntity
+                       ? m_provider.destroyEntity(id)
+                       : nlohmann::json{{"error", "destroyEntity unavailable"}};
+        });
     }
 
     return textResult("{\"error\":\"unknown tool: " + name + "\"}");

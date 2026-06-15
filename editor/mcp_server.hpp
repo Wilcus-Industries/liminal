@@ -131,6 +131,13 @@ private:
     nlohmann::json marshal(std::function<nlohmann::json()> fn,
                            const nlohmann::json& onTimeout);
 
+    // marshal() + wrap the JSON payload as an MCP text content block. On timeout
+    // the (already MCP-shaped) timeout envelope is returned verbatim. `indent`
+    // is forwarded to nlohmann::json::dump (-1 = compact). Shared by every
+    // state/control/mutation tool so the marshal + timeout + textResult dance
+    // lives in one place.
+    nlohmann::json marshalText(std::function<nlohmann::json()> fn, int indent = -1);
+
     // JSON-RPC dispatch (runs on an http thread; only marshalled bits touch the
     // scene). Returns the JSON-RPC response object, or null for notifications.
     nlohmann::json handleRpc(const nlohmann::json& req);

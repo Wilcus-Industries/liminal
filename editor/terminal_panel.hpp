@@ -78,6 +78,9 @@ private:
     // scrollback excluded). Reading-order span, rows joined with "\n".
     std::string selectedText() const;
 
+    // Selection anchor/end normalized to reading order so (sr,sc) <= (er,ec).
+    void selectionSpan(int& sr, int& sc, int& er, int& ec) const;
+
     // libvterm screen scrollback callbacks (static thunks -> members).
     static int sbPushThunk(int cols, const VTermScreenCell* cells, void* user);
     static int sbPopThunk(int cols, VTermScreenCell* cells, void* user);
@@ -106,8 +109,6 @@ private:
     // --- scrollback (main-thread only) ---
     std::deque<ScrollLine> m_scrollback; // newest at back; capped
     int m_scrollOffset = 0;              // lines scrolled up from the live view
-
-    bool m_focusedLastFrame = false;
 
     // --- mouse text selection (visible-screen cell coords, row 0 = top) ---
     bool m_selecting = false; // drag in progress

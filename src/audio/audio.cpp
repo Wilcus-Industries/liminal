@@ -370,6 +370,15 @@ struct Audio::Impl {
     bool stepLeftFoot = false;
     uint32_t noiseState = 0x9E3779B9u; // xorshift32 — per-sample scuff noise
 
+    // Advance the xorshift32 scuff-noise stream and fold to white noise in
+    // [-1, 1). Shared by every noise voice (breath / step / jump / mumble).
+    float nextWhite() {
+        noiseState ^= noiseState << 13;
+        noiseState ^= noiseState >> 17;
+        noiseState ^= noiseState << 5;
+        return static_cast<float>(noiseState) * (1.0f / 2147483648.0f) - 1.0f;
+    }
+
     // Jump one-shot voice: the step's knock+scuff pair with the pitch bending
     // up, mono/center (it's your own body leaving the ground, not a foot
     // landing to one side).
@@ -624,12 +633,7 @@ void Audio::Impl::dataCallback(ma_device* pDevice, void* pOutput, const void* /*
             } else if (ph < 0.85f) {
                 shape = std::cos(((ph - 0.35f) / 0.5f) * (0.25f * kTwoPi)); // exhale: 1 -> 0
             }                                                               // then the pause
-            uint32_t x = self->noiseState;
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            self->noiseState = x;
-            const float white = static_cast<float>(x) * (1.0f / 2147483648.0f) - 1.0f;
+            const float white = self->nextWhite();
             static const float breathLpCoef = 1.0f - std::exp(-dt * kTwoPi * kBreathLpHz);
             self->breathLP += (white - self->breathLP) * breathLpCoef;
             breath = self->breathLP * shape * self->breathEnv;
@@ -642,7 +646,11 @@ void Audio::Impl::dataCallback(ma_device* pDevice, void* pOutput, const void* /*
         // delay, so retriggering the same voice never cuts anything off. The
         // foot alternation is deliberately untouched — your own gait stays
         // honest; only the extra step is wrong. ---
-        if (enabled && self->echoCountdown >= 0 && --self->echoCountdown < 0) {
+        // Advance the countdown whether or not audio is enabled, so an echo
+        // armed before a disable doesn't freeze and re-fire on re-enable (the
+        // step/jump/mumble/creak triggers drop queued events the same way).
+        // Only emit the echo when enabled and the countdown elapses.
+        if (self->echoCountdown >= 0 && --self->echoCountdown < 0 && enabled) {
             self->stepKnockHz = self->echoHz;
             self->stepKnockPhase = 0.0f;
             self->stepKnockEnv = 0.9f;
@@ -665,12 +673,7 @@ void Audio::Impl::dataCallback(ma_device* pDevice, void* pOutput, const void* /*
             const float knock = std::sin(self->stepKnockPhase * kTwoPi) * self->stepKnockEnv;
             self->stepKnockEnv -= self->stepKnockEnv * knockCoef;
 
-            uint32_t x = self->noiseState;
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            self->noiseState = x;
-            const float white = static_cast<float>(x) * (1.0f / 2147483648.0f) - 1.0f;
+            const float white = self->nextWhite();
             self->stepNoiseLP += (white - self->stepNoiseLP) * scuffLpCoef;
             const float scuff = self->stepNoiseLP * self->stepNoiseEnv;
             self->stepNoiseEnv -= self->stepNoiseEnv * noiseCoef;
@@ -694,12 +697,7 @@ void Audio::Impl::dataCallback(ma_device* pDevice, void* pOutput, const void* /*
             const float knock = std::sin(self->jumpPhase * kTwoPi) * self->jumpKnockEnv;
             self->jumpKnockEnv -= self->jumpKnockEnv * jumpKnockCoef;
 
-            uint32_t x = self->noiseState;
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            self->noiseState = x;
-            const float white = static_cast<float>(x) * (1.0f / 2147483648.0f) - 1.0f;
+            const float white = self->nextWhite();
             self->jumpNoiseLP += (white - self->jumpNoiseLP) * scuffLpCoef;
             const float scuff = self->jumpNoiseLP * self->jumpNoiseEnv;
             self->jumpNoiseEnv -= self->jumpNoiseEnv * jumpNoiseCoef;
@@ -714,12 +712,7 @@ void Audio::Impl::dataCallback(ma_device* pDevice, void* pOutput, const void* /*
         static const float mumbleCoef = 1.0f - std::exp(-dt / kMumbleTauSeconds);
         float mumble = 0.0f;
         if (self->mumbleEnv > 1e-3f) {
-            uint32_t x = self->noiseState;
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            self->noiseState = x;
-            const float white = static_cast<float>(x) * (1.0f / 2147483648.0f) - 1.0f;
+            const float white = self->nextWhite();
             // Voice band narrows with decay (0.020 -> 0.012 one-pole coef).
             const float lpCoef = 0.020f - 0.008f * decay;
             self->mumbleLP += (white - self->mumbleLP) * lpCoef;

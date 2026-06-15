@@ -78,6 +78,12 @@ const std::array<Api, 4> kOsMembers = {{
     {"time", "([t])"}, {"clock", "()"}, {"date", "([fmt])"}, {"getenv", "(name)"},
 }};
 
+const std::array<Api, 8> kIoMembers = {{
+    {"write", "(...)"},      {"read", "([fmt])"}, {"open", "(name [, mode])"},
+    {"lines", "([name])"},   {"close", "([f])"},  {"stdout", "file"},
+    {"stderr", "file"},      {"stdin", "file"},
+}};
+
 // --- engine API (from lua_bindings.cpp) --------------------------------------
 
 const std::array<Api, 9> kLmMembers = {{
@@ -314,6 +320,8 @@ std::vector<CompletionItem> computeCompletions(const std::string& lineText,
             pushAll(items, prefix, kMathMembers, 0);
         } else if (base == "os") {
             pushAll(items, prefix, kOsMembers, 0);
+        } else if (base == "io") {
+            pushAll(items, prefix, kIoMembers, 0);
         } else {
             // Unknown identifier: offer the field-ish union (Transform /
             // MeshRenderer / vec). No type inference, so this is a best guess.

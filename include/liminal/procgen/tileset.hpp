@@ -19,6 +19,7 @@
 //   plaza  - paved gathering ground (preferred door frontage)
 //   void   - nothing; falling territory (repairs bridge it with `deck`)
 
+#include <cassert>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -41,6 +42,11 @@ class TileSet {
 public:
     TileSet() = default;
     explicit TileSet(std::vector<TileDef> defs) : m_tiles(std::move(defs)) {
+        // TileMask is 16-bit: maskOf(id>=16) truncates the shift to 0 and
+        // allMask() drops high bits past 16 tiles. The vocabulary must stay
+        // within 16 tiles for the masks to be correct.
+        assert(m_tiles.size() <= 16 &&
+               "TileSet exceeds 16 tiles; TileMask (uint16_t) cannot represent it");
         symmetrize();
     }
 

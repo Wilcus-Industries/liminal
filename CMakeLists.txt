@@ -14,6 +14,16 @@ option(LIMINAL_BUILD_EDITOR   "Build the editor (pulls ImGuizmo)" ${PROJECT_IS_T
 option(LIMINAL_BUILD_PLAYER   "Build standalone game player" ${PROJECT_IS_TOP_LEVEL})
 option(LIMINAL_BUILD_TESTS    "Build headless tests (ctest)" ${PROJECT_IS_TOP_LEVEL})
 
+# Warning flags applied ONLY to liminal's own translation units — never to the
+# vendored sources we compile in-tree (ImGui, ImGuizmo, ImGuiColorTextEdit,
+# libvterm, stb, miniaudio, glad), which are noisy under -Wextra. Subdirectories
+# (editor/player/tests) inherit this variable and scope it to their own files.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang") # also matches AppleClang
+    set(LIMINAL_WARNING_FLAGS -Wall -Wextra)
+else()
+    set(LIMINAL_WARNING_FLAGS "")
+endif()
+
 # ---------------------------------------------------------------------------
 # Platform → OpenGL version selection.
 # Apple froze OpenGL at 4.1 core; everywhere else we can ask for 4.6 core.
@@ -54,6 +64,18 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/include/liminal/version.hpp.in
     ${CMAKE_CURRENT_BINARY_DIR}/include/liminal/version.hpp
     @ONLY)
+
+# Newer macOS ld (Xcode 15+/ld-prime) warns when a static lib (glfw) reaches an
+# executable's link line via more than one path — here liminal's PRIVATE glfw
+# dep (propagated through the static archive) plus the editor/player's own
+# glfw link for the GLFW_KEY_* constants. The duplication is harmless (same
+# archive), so silence the warning when the active linker understands the flag.
+include(CheckLinkerFlag)
+check_linker_flag(CXX "-Wl,-no_warn_duplicate_libraries"
+    LIMINAL_LD_NO_WARN_DUP_LIBS)
+if(LIMINAL_LD_NO_WARN_DUP_LIBS)
+    add_link_options("-Wl,-no_warn_duplicate_libraries")
+endif()
 
 # ---------------------------------------------------------------------------
 # liminal_imgui: Dear ImGui compiled exactly once (core + GLFW + OpenGL3
@@ -105,7 +127,6 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 # liminal: the engine static library.
 # ---------------------------------------------------------------------------
 add_library(liminal STATIC
-    src/version.cpp
     src/core/app.cpp
     src/core/asset_cache.cpp
     src/core/assets.cpp
@@ -131,6 +152,9 @@ add_library(liminal STATIC
     src/procgen/structure.cpp
     src/ui/imgui_layer.cpp)
 add_library(liminal::liminal ALIAS liminal)
+
+# liminal is 100% first-party sources — warn on all of them.
+target_compile_options(liminal PRIVATE ${LIMINAL_WARNING_FLAGS})
 
 target_include_directories(liminal PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

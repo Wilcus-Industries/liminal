@@ -33,6 +33,19 @@ std::string canonical(const std::string& p) {
     return abs.lexically_normal().string();
 }
 
+void writeRecents(const std::vector<RecentProject>& list) {
+    const fs::path file = recentsFile();
+    if (file.empty()) return;
+    nlohmann::json j = nlohmann::json::array();
+    for (const auto& rp : list)
+        j.push_back({{"path", rp.path},
+                     {"title", rp.title},
+                     {"lastOpened", rp.lastOpened}});
+    std::ofstream out(file);
+    if (!out) return;
+    out << j.dump(2) << '\n';
+}
+
 } // namespace
 
 std::vector<RecentProject> loadRecentProjects() {
@@ -62,19 +75,6 @@ std::vector<RecentProject> loadRecentProjects() {
                          return a.lastOpened > b.lastOpened;
                      });
     return out;
-}
-
-static void writeRecents(const std::vector<RecentProject>& list) {
-    const fs::path file = recentsFile();
-    if (file.empty()) return;
-    nlohmann::json j = nlohmann::json::array();
-    for (const auto& rp : list)
-        j.push_back({{"path", rp.path},
-                     {"title", rp.title},
-                     {"lastOpened", rp.lastOpened}});
-    std::ofstream out(file);
-    if (!out) return;
-    out << j.dump(2) << '\n';
 }
 
 void recordRecentProject(const std::string& projectFile,

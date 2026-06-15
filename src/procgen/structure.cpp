@@ -11,6 +11,8 @@
 
 #include <liminal/procgen/structure.hpp>
 
+#include "noise_detail.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -48,16 +50,11 @@ void box(Built& out, const glm::vec3& mn, const glm::vec3& mx, bool walkable = f
     out.boxes.push_back(PartBox{mn, mx, walkable});
 }
 
-std::uint32_t hashU32(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
+using detail::hashU32;
 
-float hash01(unsigned int seed, unsigned int i) {
+// 1D index hash → [0,1). Named distinctly from terrain's 2D lattice hash01 to
+// avoid confusing two different-arity helpers that share the noise family.
+float hash1D(unsigned int seed, unsigned int i) {
     return static_cast<float>(hashU32(i * 0x9E3779B9U ^ hashU32(seed)) & 0xFFFFFFU) / 16777216.0f;
 }
 
@@ -74,7 +71,7 @@ void wallWithDoor(Built& out, float x0, float x1, float z0, float z1,
 
 } // namespace
 
-Built building(float size, int height, unsigned int seed) {
+Built building(float size, int height, unsigned int /*seed*/) {
     Built out;
     const float hw = 2.4f + size * 1.3f;             // half width (door wall on +z)
     const float hd = (2.0f + size * 1.1f);           // half depth
@@ -93,7 +90,7 @@ Built building(float size, int height, unsigned int seed) {
     return out;
 }
 
-Built barn(float size, int height, unsigned int seed) {
+Built barn(float size, int height, unsigned int /*seed*/) {
     Built out;
     const float hw = 2.6f + size * 1.2f;   // gable ends face +/- z
     const float hd = 3.2f + size * 1.5f;
@@ -122,7 +119,7 @@ Built barn(float size, int height, unsigned int seed) {
     return out;
 }
 
-Built tower(float size, int height, unsigned int seed) {
+Built tower(float size, int height, unsigned int /*seed*/) {
     Built out;
     const int tiers = std::clamp(2 + height / 2, 2, 6);
     const float tierH = 2.0f + height * 0.35f;
@@ -152,7 +149,7 @@ Built wallRun(float size, int height, unsigned int seed) {
     const float h = 1.9f + height * 0.5f;
     const float t = 0.5f;
     // Gap position varies with seed so a row of walls doesn't read as copies.
-    const float gapAt = (hash01(seed, 1) - 0.5f) * halfLen;
+    const float gapAt = (hash1D(seed, 1) - 0.5f) * halfLen;
     const float g0 = gapAt - 0.95f, g1 = gapAt + 0.95f;
     box(out, {-halfLen, 0.0f, -t * 0.5f}, {g0, h, t * 0.5f});
     box(out, {g1, 0.0f, -t * 0.5f}, {halfLen, h, t * 0.5f});
@@ -160,7 +157,7 @@ Built wallRun(float size, int height, unsigned int seed) {
     return out;
 }
 
-Built bigArch(float size, int height, unsigned int seed) {
+Built bigArch(float size, int height, unsigned int /*seed*/) {
     Built out;
     const float halfSpan = 1.8f + size * 1.0f;
     const float h = 3.0f + height * 0.7f;
@@ -171,7 +168,7 @@ Built bigArch(float size, int height, unsigned int seed) {
     return out;
 }
 
-Built grandStairs(float size, int height, unsigned int seed) {
+Built grandStairs(float size, int height, unsigned int /*seed*/) {
     Built out;
     const float rise = 0.42f; // < player step-up (0.5) so every step mounts
     const float run = 0.95f;
@@ -216,7 +213,7 @@ Built bridge(const glm::vec3& a, const glm::vec3& b, float size,
     };
 
     const int total = 2 * n;
-    const int keep = severed ? std::max(2, static_cast<int>(total * (0.45f + hash01(seed, 3) * 0.2f)))
+    const int keep = severed ? std::max(2, static_cast<int>(total * (0.45f + hash1D(seed, 3) * 0.2f)))
                              : total;
     float px = a.x, pz = a.z;
     int placed = 0;
@@ -259,7 +256,7 @@ Built bridge(const glm::vec3& a, const glm::vec3& b, float size,
 }
 
 Built pier(const glm::vec3& start, const glm::vec2& dir, float size,
-           const HeightFn& ground, unsigned int seed) {
+           const HeightFn& ground, unsigned int /*seed*/) {
     Built out;
     const float halfW = 0.9f + size * 0.35f;
     const float len = 9.0f + size * 5.0f;

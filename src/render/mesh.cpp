@@ -15,6 +15,8 @@
 
 #include <liminal/render/mesh.hpp>
 
+#include "hash_detail.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -85,14 +87,7 @@ void addBox(MeshData& md, const glm::vec3& mn, const glm::vec3& mx) {
 
 // Same deterministic hash family as Texture's noise — blob shapes must be
 // reproducible from their seed so a recurring dream object keeps its lumps.
-std::uint32_t hashU32(std::uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
+using render_detail::hashU32;
 
 float hash01(std::uint32_t seed, std::uint32_t index) {
     std::uint32_t h = hashU32(index * 0x9E3779B9U ^ hashU32(seed));
@@ -412,7 +407,6 @@ Mesh Mesh::form(int sides, float twist, float taper, unsigned int seed) {
     taper = std::clamp(taper, 0.0f, 1.0f);
     twist = std::clamp(twist, 0.0f, 0.9f);
 
-    const float kTau = 6.28318530717958647692f;
     const float baseR = 0.5f;             // bottom-ring radius
     const float topR = baseR * taper;     // 0 -> apex (cone)
     const float height = 1.6f;            // before the object's own scale

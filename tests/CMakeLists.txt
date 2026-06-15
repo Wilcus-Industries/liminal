@@ -27,3 +27,9 @@ add_test(NAME build_pak COMMAND test_build_pak)
 add_executable(test_lua_procgen test_lua_procgen.cpp)
 target_link_libraries(test_lua_procgen PRIVATE liminal::liminal)
 add_test(NAME lua_procgen COMMAND test_lua_procgen)
+
+# All test sources are first-party — warn on them too.
+foreach(t test_procgen_determinism test_scene_roundtrip test_pak_roundtrip
+          test_build_pak test_lua_procgen)
+    target_compile_options(${t} PRIVATE ${LIMINAL_WARNING_FLAGS})
+endforeach()

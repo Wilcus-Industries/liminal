@@ -10,7 +10,6 @@
 #include <liminal/core/assets.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdio>
 #include <deque>

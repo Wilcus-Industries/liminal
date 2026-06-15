@@ -19,6 +19,11 @@ struct Rng {
     }
     float next01() { return (next() & 0x00FFFFFFu) / 16777216.0f; }
     int range(int lo, int hi) { // inclusive
+        // Guard the invalid span: hi == lo - 1 would divide by zero and
+        // hi < lo - 1 wraps to a huge unsigned modulus. The valid path (hi >=
+        // lo) still consumes one next() exactly as before, so determinism for
+        // well-formed inputs is unchanged.
+        if (hi < lo) return lo;
         return lo + static_cast<int>(next() % static_cast<std::uint32_t>(hi - lo + 1));
     }
 };

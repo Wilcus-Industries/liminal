@@ -2,6 +2,7 @@
 # baked into a pak appended to this binary (or a sidecar "<exe>.pak"). Scripting
 # is non-optional — a shipped game without Lua behavior is pointless.
 add_executable(liminal-player main.cpp)
+target_compile_options(liminal-player PRIVATE ${LIMINAL_WARNING_FLAGS})
 # glfw linked for GLFW_KEY_* constants (ESC-to-quit) only.
 target_link_libraries(liminal-player PRIVATE liminal::liminal glfw)
 

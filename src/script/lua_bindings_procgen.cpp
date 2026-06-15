@@ -28,8 +28,6 @@
 #include <liminal/render/mesh.hpp>
 
 #include <cstdint>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -63,6 +61,14 @@ std::string optStr(const sol::table& t, const char* key, const std::string& def)
     if (o.is<std::string>()) return o.as<std::string>();
     return def;
 }
+// Integer-keyed variant for positional pairs ({x, z} stored at Lua keys 1, 2).
+// The named optInt(.,"1",.) string key never matches a Lua integer key.
+int optIntAt(const sol::table& t, int key, int def) {
+    sol::object o = t[key];
+    if (o.is<int>()) return o.as<int>();
+    if (o.is<double>()) return int(o.as<double>());
+    return def;
+}
 
 // terrain kind / water enums from string names (defaults preserved).
 pg::TerrainParams::Kind kindOf(const std::string& s,
@@ -85,9 +91,8 @@ pg::TerrainParams::Water waterOf(const std::string& s,
     return def;
 }
 
-// Read the TileSet JSON overlay through Assets::resolve + std::ifstream into a
-// temp file path TileSet::fromJsonFile can open (fromJsonFile takes a path, so
-// we just resolve and forward it). std::filesystem only, cross-platform.
+// Resolve the TileSet JSON overlay path through Assets::resolve and forward it
+// to TileSet::fromJsonFile (which opens the path itself).
 pg::TileSet loadTileSet(sol::optional<std::string> jsonPath) {
     const pg::TileSet base = pg::defaultTileSet();
     if (!jsonPath || jsonPath->empty()) return base;
@@ -306,7 +311,7 @@ void bindUsertypes(sol::state& lua) {
 
 // --- functions ---------------------------------------------------------------
 
-void bindFunctions(sol::table& procgen, sol::state& lua) {
+void bindFunctions(sol::table& procgen, sol::state& /*lua*/) {
     procgen["rng"] = [](std::uint32_t seed) { return pg::Rng(seed); };
 
     procgen["tileset"] = [](sol::optional<std::string> jsonPath) {
@@ -379,8 +384,8 @@ void bindFunctions(sol::table& procgen, sol::state& lua) {
         std::vector<glm::ivec2> sites;
         for (auto& kv : sitesT) {
             sol::table pair = kv.second.as<sol::table>();
-            sites.push_back({optInt(pair, "x", optInt(pair, "1", 0)),
-                             optInt(pair, "z", optInt(pair, "2", 0))});
+            sites.push_back({optInt(pair, "x", optIntAt(pair, 1, 0)),
+                             optInt(pair, "z", optIntAt(pair, 2, 0))});
         }
         std::vector<pg::FootprintPlan> plans;
         for (auto& kv : plansT)

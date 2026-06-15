@@ -267,7 +267,13 @@ void bindAudio(sol::table& lm, sol::state& lua, ScriptHost& host) {
             return;
         }
         if (auto it = audioInts().find(name); it != audioInts().end()) {
-            (p.*(it->second)).store(value.is<int>() ? value.as<int>() : 0);
+            // Accept the double subtype too: a Lua literal like 2.0 reports
+            // is<int>()==false and would otherwise silently store 0. Matches
+            // the dual-subtype convention used by the seed read and procgen.
+            (p.*(it->second))
+                .store(value.is<int>() ? value.as<int>()
+                       : value.is<double>() ? int(value.as<double>())
+                                            : 0);
             return;
         }
         if (name == "enabled") {
@@ -282,6 +288,9 @@ void bindAudio(sol::table& lm, sol::state& lua, ScriptHost& host) {
         Audio* a = host.context().audio;
         if (!a) {
             warnOnce("lm.audio.get: no audio subsystem (returns 0)");
+            // Match the with-subsystem path's Lua type: int-typed names return
+            // an integer 0, everything else a double 0.0.
+            if (audioInts().count(name)) return sol::make_object(s, 0);
             return sol::make_object(s, 0.0);
         }
         AudioParams& p = a->params;

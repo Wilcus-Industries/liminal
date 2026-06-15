@@ -43,7 +43,7 @@
 
 namespace liminal {
 
-// Returns the engine version string, e.g. "0.1.0".
-const char* version() noexcept;
+// The version string is available as the constexpr liminal::kVersionString from
+// <liminal/version.hpp> (configured at build time); no runtime accessor.
 
 } // namespace liminal

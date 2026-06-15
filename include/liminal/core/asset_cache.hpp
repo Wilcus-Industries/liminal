@@ -13,8 +13,9 @@
 //             builtin:concrete  builtin:wood  builtin:metal  builtin:brick
 //             builtin:plaster  builtin:grass  builtin:dirt  builtin:water
 //             (procedural, neutral grays — tint via MeshRenderer.color)
-//             anything else: a file path resolved via Assets::resolve and
-//             loaded with Texture::fromFile (PNG etc.).
+//             anything else: a file path read through Assets::readFile (the
+//             VFS, so a mounted pak serves it) and decoded via
+//             Texture::fromMemory (PNG etc.).
 //
 // There is no mesh file loader yet, so a non-builtin mesh name is unknown.
 // Unknown names warn once on stderr and return nullptr; callers skip the draw.

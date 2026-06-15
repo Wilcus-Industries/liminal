@@ -34,6 +34,13 @@ target_include_directories(liminal-editor PRIVATE
     ${libvterm_SOURCE_DIR}/include
     ${libvterm_SOURCE_DIR}/src)
 
+# Warn on our own editor sources only — the in-tree vendored sources (ImGuizmo,
+# ImGuiColorTextEdit, libvterm) share this target but must not be warned on.
+set_source_files_properties(
+    main.cpp editor_app.cpp recent_projects.cpp theme.cpp
+    script_editor.cpp lua_complete.cpp terminal_panel.cpp mcp_server.cpp
+    PROPERTIES COMPILE_OPTIONS "${LIMINAL_WARNING_FLAGS}")
+
 # glfw for GLFW_KEY_* constants; liminal_imgui already carries the ImGui
 # include dirs (incl. imgui_internal.h for the DockBuilder API).
 target_link_libraries(liminal-editor PRIVATE liminal::liminal liminal::imgui glfw)

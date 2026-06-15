@@ -29,9 +29,8 @@ namespace {
 // Scrollback cap (lines). A ring: oldest dropped past this.
 constexpr size_t kScrollbackMax = 5000;
 
-// xterm's default RGB for the 16 ANSI colors, used only as a last-resort
-// palette before libvterm resolves its own (it normally does so itself via
-// convert_color_to_rgb; this is dead-simple defensive packing).
+// Pack r,g,b into an opaque ImU32 (alpha 255). Colors arrive already resolved
+// to RGB by vterm_screen_convert_color_to_rgb; this is just the final pack.
 inline ImU32 packRGB(uint8_t r, uint8_t g, uint8_t b) {
     return IM_COL32(r, g, b, 255);
 }
@@ -201,13 +200,23 @@ void TerminalPanel::ensureSize(int cols, int rows) {
 // so a reading-order span is pulled per-row: each row's [c0,c1) (c0 = startCol
 // on the first row else 0; c1 = endCol+1 on the last row else cols), trailing
 // spaces trimmed, rows joined with "\n".
-std::string TerminalPanel::selectedText() const {
-    if (!m_hasSel || !m_vt) return {};
-    VTermScreen* screen = vterm_obtain_screen(m_vt);
-    if (!screen) return {};
+void TerminalPanel::selectionSpan(int& sr, int& sc, int& er, int& ec) const {
+    sr = m_selAnchorRow;
+    sc = m_selAnchorCol;
+    er = m_selEndRow;
+    ec = m_selEndCol;
+    if (sr > er || (sr == er && sc > ec)) {
+        std::swap(sr, er);
+        std::swap(sc, ec);
+    }
+}
 
-    int sr = m_selAnchorRow, sc = m_selAnchorCol, er = m_selEndRow, ec = m_selEndCol;
-    if (sr > er || (sr == er && sc > ec)) { std::swap(sr, er); std::swap(sc, ec); }
+std::string TerminalPanel::selectedText() const {
+    if (!m_hasSel || !m_vt || !m_screen) return {};
+    VTermScreen* screen = m_screen; // cached in lockstep with m_vt (startSession)
+
+    int sr, sc, er, ec;
+    selectionSpan(sr, sc, er, ec);
 
     std::string out;
     std::vector<char> buf;
@@ -252,9 +261,31 @@ void TerminalPanel::handleInput() {
     if ((io.KeySuper || io.KeyCtrl) && ImGui::IsKeyPressed(ImGuiKey_V, false)) {
         if (const char* clip = ImGui::GetClipboardText()) {
             vterm_keyboard_start_paste(m_vt);
-            for (const char* p = clip; *p; ++p)
-                vterm_keyboard_unichar(m_vt, uint32_t((unsigned char)*p),
-                                       VTERM_MOD_NONE);
+            // Decode UTF-8 to code points before feeding vterm_keyboard_unichar:
+            // with VTERM_MOD_NONE libvterm re-encodes its argument AS a code
+            // point, so passing raw bytes would turn each multibyte lead/cont
+            // byte into its own (wrong) character. ASCII is unaffected.
+            for (const char* p = clip; *p;) {
+                unsigned char c = static_cast<unsigned char>(*p);
+                uint32_t cp;
+                int len;
+                if (c < 0x80) { cp = c; len = 1; }
+                else if ((c >> 5) == 0x6) { cp = c & 0x1Fu; len = 2; }
+                else if ((c >> 4) == 0xE) { cp = c & 0x0Fu; len = 3; }
+                else if ((c >> 3) == 0x1E) { cp = c & 0x07u; len = 4; }
+                else { ++p; continue; } // stray continuation / invalid lead
+                bool ok = true;
+                for (int i = 1; i < len; ++i) {
+                    if ((static_cast<unsigned char>(p[i]) & 0xC0u) != 0x80u) {
+                        ok = false; // truncated (incl. NUL) or malformed
+                        break;
+                    }
+                    cp = (cp << 6) | (static_cast<unsigned char>(p[i]) & 0x3Fu);
+                }
+                if (!ok) { ++p; continue; }
+                vterm_keyboard_unichar(m_vt, cp, VTERM_MOD_NONE);
+                p += len;
+            }
             vterm_keyboard_end_paste(m_vt);
         }
     } else {
@@ -328,8 +359,8 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
     // Selection: LINEAR (reading-order) span like a real terminal. Normalize
     // anchor/end to (sr,sc) <= (er,ec); a visible cell (row,col) is selected if
     // it falls between those two points in reading order (full lines in between).
-    int sr = m_selAnchorRow, sc = m_selAnchorCol, er = m_selEndRow, ec = m_selEndCol;
-    if (sr > er || (sr == er && sc > ec)) { std::swap(sr, er); std::swap(sc, ec); }
+    int sr, sc, er, ec;
+    selectionSpan(sr, sc, er, ec);
     auto cellSelected = [&](int row, int col) {
         if (!m_hasSel) return false;
         if (row < sr || row > er) return false;
@@ -340,7 +371,9 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
     const ImU32 selBg = IM_COL32(80, 130, 200, 110);
 
     char utf8[8];
-    auto drawCellGlyph = [&](float x, float y, uint32_t cp) {
+    // Encodes a codepoint into the shared utf8[] buffer; the caller draws it
+    // with dl->AddText. (Encode-only — the cell position is the caller's.)
+    auto encodeCellGlyph = [&](uint32_t cp) {
         if (cp == 0 || cp == ' ') return;
         // Encode the codepoint to UTF-8 for ImGui's text draw.
         int n = 0;
@@ -383,7 +416,7 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
                 dl->AddRectFilled(ImVec2(x, y), ImVec2(x + cellW, y + cellH), selBg);
             const uint32_t cp = line.chars[size_t(c)];
             if (cp && cp != ' ') {
-                drawCellGlyph(x, y, cp);
+                encodeCellGlyph(cp);
                 dl->AddText(font, fontSize, ImVec2(x, y), line.fg[size_t(c)], utf8);
             }
         }
@@ -410,7 +443,7 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
                 dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + cellH), selBg);
             const uint32_t cp = cell.chars[0];
             if (cp && cp != ' ') {
-                drawCellGlyph(x, y, cp);
+                encodeCellGlyph(cp);
                 dl->AddText(font, fontSize, ImVec2(x, y), fgCol, utf8);
             }
         }
@@ -435,7 +468,7 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
                 if (vterm_screen_get_cell(m_screen, cur, &cell)) {
                     const uint32_t cp = cell.chars[0];
                     if (cp && cp != ' ') {
-                        drawCellGlyph(x, y, cp);
+                        encodeCellGlyph(cp);
                         dl->AddText(font, fontSize, ImVec2(x, y),
                                     packRGB(18, 18, 22), utf8);
                     }
@@ -542,7 +575,6 @@ void TerminalPanel::draw() {
         ImGui::SetNextFrameWantCaptureKeyboard(true);
         handleInput();
     }
-    m_focusedLastFrame = focused;
 
     if (m_exited && !m_status.empty()) {
         ImGui::Separator();

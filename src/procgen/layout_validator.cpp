@@ -9,8 +9,6 @@
 #include <liminal/procgen/layout_validator.hpp>
 
 #include <algorithm>
-#include <cmath>
-#include <cstdlib>
 #include <deque>
 
 namespace liminal::procgen {
