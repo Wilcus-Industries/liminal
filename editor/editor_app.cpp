@@ -1924,56 +1924,6 @@ void EditorApp::seedLuaSkill() {
 
 namespace {
 
-// Default vertex source for frag-only shaders — an exact copy of
-// assets/shaders/native/scene.vert so wrapped fragments link against the same
-// varyings (vNormal/vViewDist/vGradT/smooth vUV) the native pack emits.
-const char* kFragOnlyVert = R"GLSL(#version 410 core
-layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec2 aUV;
-
-uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProj;
-uniform mat3 uNormalMat;
-uniform float uGradBase;
-uniform float uGradInv;
-
-out vec3 vNormal;
-out float vViewDist;
-out float vGradT;
-smooth out vec2 vUV;
-
-void main()
-{
-    vec4 viewPos = uView * uModel * vec4(aPos, 1.0);
-    vNormal = uNormalMat * aNormal;
-    vViewDist = length(viewPos.xyz);
-    vGradT = clamp((aPos.y - uGradBase) * uGradInv, 0.0, 1.0);
-    vUV = aUV;
-    gl_Position = uProj * viewPos;
-}
-)GLSL";
-
-// Prepended to a frag-only file's body. Frag-only files are BODIES ONLY — no
-// #version, no in/out/uniform decls — the engine provides them here. Authors
-// write `void main(){ ... }` using these ins/uniforms and write FragColor.
-const char* kFragOnlyHeader = R"GLSL(#version 410 core
-in vec3 vNormal;
-in float vViewDist;
-in float vGradT;
-smooth in vec2 vUV;
-
-uniform sampler2D uTex;
-uniform vec3 uColor;
-uniform vec3 uColor2;
-uniform vec3 uLightDir;
-uniform float uAlphaTest;
-
-out vec4 FragColor;
-
-)GLSL";
-
 std::string slurp(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
     if (!in) throw std::runtime_error("cannot read " + p.string());
@@ -1986,26 +1936,25 @@ std::string slurp(const fs::path& p) {
 
 void EditorApp::registerShaderFromDisk(const std::string& name,
                                        const fs::path& full, bool fragOnly) {
-    ShaderPack pack = ShaderPack::standard(); // borrow the shared blit stage
-    pack.label = name;
-    pack.res = ShaderResolution::Native;
-
     ShaderWatch w;
     w.full = full;
     w.fragOnly = fragOnly;
     std::error_code ec;
+
+    // Build via the shared core helpers so the frag-only wrap contract (native
+    // vertex stage + native frag header) lives in one place.
+    ShaderPack pack;
     if (fragOnly) {
-        pack.sceneVert = kFragOnlyVert;
-        pack.sceneFrag = std::string(kFragOnlyHeader) + slurp(full);
+        pack = ShaderPack::makeFragOnlyPack(slurp(full));
         w.fragMtime = fs::last_write_time(full, ec);
     } else {
         const fs::path vert = full / "scene.vert";
         const fs::path frag = full / "scene.frag";
-        pack.sceneVert = slurp(vert);
-        pack.sceneFrag = slurp(frag);
+        pack = ShaderPack::makeFullPack(slurp(vert), slurp(frag));
         w.vertMtime = fs::last_write_time(vert, ec);
         w.fragMtime = fs::last_write_time(frag, ec);
     }
+    pack.label = name; // name the pack after its dir/file in compile errors
 
     // Registration stores source only (recompiles immediately if active — the
     // hot-reload mechanism). May throw on the active-pack recompile.
