@@ -5,6 +5,7 @@ A game engine for strange worlds.
 ![freaky_cubes](assets/freaky_cubes.png)
 *freaky AI cubes*
 
+
 ## Features
 
 - Full-fledged editor.
@@ -17,8 +18,18 @@ A game engine for strange worlds.
 
 ## Getting Started
 
-Open your project
+- Open the Liminal executable.
 
-`./path/to/liminal-editor [path/to/project.ljson]`
+![A](assets/A_landing.png)
 
+- Create a new project.
 
+![B](assets/B_create.png)
+
+- Say hello to your very own game!
+
+![C](assets/C_editor.png)
+
+- Use the MCP server and skill or write your own Lua scripts.
+
+![D](assets/D_mcp.png)
