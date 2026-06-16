@@ -40,6 +40,9 @@ struct MeshRenderer {
     // rgb tints the mesh (fed to DrawItem color+color2); alpha is currently
     // ignored — the retro renderer does no blending.
     glm::vec4 color{1.0f};
+    // Top color of the vertical gradient; defaults to match `color` so a plain
+    // single-color entity stays uniform until a script/inspector sets it apart.
+    glm::vec4 color2{1.0f};
     // "" = untextured. "builtin:checker" / "builtin:grid" / "builtin:noise" /
     // "builtin:white" / material names ("builtin:wood", ...), or a file path
     // resolved through Assets::resolve at first use.
@@ -76,6 +79,19 @@ struct AudioSource {
 struct Light {
     glm::vec3 color{1.0f};
     float intensity = 1.0f;
+};
+
+// World-local axis-aligned bounding box for physics/raycast queries. Zero
+// halfExtents means derive the box from the mesh's local bounds at query time.
+struct Collider {
+    glm::vec3 center{0.0f};
+    glm::vec3 halfExtents{0.0f};
+};
+
+// Entity rotates to face the active camera each frame: yaw-only when true,
+// full-facing (also pitch toward the camera) otherwise.
+struct Billboard {
+    bool yawOnly = true;
 };
 
 // Behavior via Lua: an entity may run any number of scripts, each its own

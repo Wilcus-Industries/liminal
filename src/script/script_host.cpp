@@ -24,14 +24,9 @@ namespace fs = std::filesystem;
 ScriptHost::ScriptHost(ScriptContext ctx)
     : m_ctx(std::move(ctx)), m_epoch(std::chrono::steady_clock::now()) {
     m_lua.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string,
-                         sol::lib::table, sol::lib::os);
-    // The os library is opened only for time/clock/date/difftime; strip the
-    // process/filesystem-touching members. io is never opened.
-    sol::table os = m_lua["os"];
-    for (const char* k : {"execute", "remove", "rename", "exit", "getenv",
-                          "tmpname", "setlocale"}) {
-        os[k] = sol::lua_nil;
-    }
+                         sol::lib::table, sol::lib::os, sol::lib::io);
+    // Full io + os are exposed to scripts: complete standard-library file
+    // access. This reads the real filesystem, not the mounted pak.
 
     luabind::bindCore(m_lua, *this);
 
@@ -63,6 +58,53 @@ void ScriptHost::emitLog(const std::string& msg) {
     std::printf("[lua] %s\n", msg.c_str());
     std::fflush(stdout);
     if (m_logSink) m_logSink(msg);
+}
+
+sol::object ScriptHost::importModule(const std::string& path) {
+    if (auto it = m_modules.find(path); it != m_modules.end()) {
+        return it->second; // already loaded (or in-flight placeholder) — shared
+    }
+
+    // Read pak-first, exactly like ensureFile: a shipped game must not be
+    // shadowed by stray files. Resolve only to build a @-chunkname for traces.
+    std::optional<std::string> bytes = Assets::readFile(path);
+    if (!bytes) {
+        reportError(path, "cannot import module (resolved to '" +
+                              Assets::resolve(path) + "')");
+        return sol::object(m_lua, sol::in_place, sol::lua_nil);
+    }
+
+    // Insert a nil placeholder BEFORE running so a re-entrant import of the same
+    // path during its own execution returns nil instead of looping forever.
+    sol::object placeholder(m_lua, sol::in_place, sol::lua_nil);
+    m_modules.emplace(path, placeholder);
+
+    std::error_code ec;
+    const std::string resolved = Assets::resolve(path);
+    const bool onDisk =
+        fs::exists(resolved, ec) && !fs::is_directory(resolved, ec);
+    const std::string chunkName = "@" + (onDisk ? resolved : path);
+
+    sol::load_result chunk = m_lua.load(*bytes, chunkName);
+    if (!chunk.valid()) {
+        sol::error err = chunk;
+        reportError(path, err.what());
+        return m_modules[path]; // still nil placeholder
+    }
+    sol::protected_function_result result = chunk.get<sol::protected_function>()();
+    if (!result.valid()) {
+        sol::error err = result;
+        reportError(path, err.what());
+        return m_modules[path]; // still nil placeholder
+    }
+
+    // Whatever the chunk returned; nothing -> cache `true` (require convention)
+    // so it isn't re-run on the next import.
+    sol::object ret = result.return_count() > 0
+                          ? sol::object(result.get<sol::object>())
+                          : sol::object(m_lua, sol::in_place, true);
+    m_modules[path] = ret;
+    return ret;
 }
 
 ScriptHost::ScriptFile& ScriptHost::ensureFile(const std::string& path) {

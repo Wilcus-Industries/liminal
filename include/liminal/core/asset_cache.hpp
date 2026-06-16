@@ -9,6 +9,7 @@
 //             builtin:stair  builtin:plane  builtin:quad
 //             seeded: builtin:blob:<seed>  builtin:tree:<seed>
 //                     builtin:rock:<seed>  builtin:crystal:<seed>
+//             parametric: builtin:form:<sides>,<twist>,<taper>[,<seed>]
 //   textures: builtin:white  builtin:checker  builtin:grid  builtin:noise
 //             builtin:concrete  builtin:wood  builtin:metal  builtin:brick
 //             builtin:plaster  builtin:grass  builtin:dirt  builtin:water
@@ -46,6 +47,12 @@ public:
     // need the pointer). Used by lm.assets.add_mesh so scripts can feed
     // procedural geometry to the cache and get back the resolvable name.
     std::string addMesh(const std::string& name, const MeshData& data);
+
+    // Registers (or overwrites) a runtime-built texture. Storage key is
+    // "runtime:" + name (unless name already begins with "runtime:"). Clears any
+    // warn-once memo for that key. Returns the storage key. Backs
+    // lm.assets.add_texture. Texture is move-only, so it is taken by value.
+    std::string addTexture(const std::string& name, Texture texture);
 
 private:
     std::unordered_map<std::string, Mesh> m_meshes;

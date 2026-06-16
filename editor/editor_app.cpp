@@ -18,6 +18,7 @@
 #include <liminal/core/pak.hpp>
 #include <liminal/core/platform.hpp>
 #include <liminal/scene/component_registry.hpp>
+#include <liminal/scene/raycast.hpp>
 #include <liminal/scene/serialize.hpp>
 #include <liminal/version.hpp>
 
@@ -42,6 +43,23 @@ namespace fs = std::filesystem;
 namespace liminal::editor {
 
 namespace {
+
+// Model matrix for a billboarded entity: keep position+scale, replace rotation
+// with a camera-facing one. yawOnly -> spin about Y only; else also pitch.
+glm::mat4 billboardModel(const Transform& t, const glm::vec3& camPos,
+                         bool yawOnly) {
+    const glm::vec3 d = camPos - t.position;
+    const float yaw = std::atan2(d.x, d.z); // face the camera about +Y
+    glm::mat4 m = glm::translate(glm::mat4(1.0f), t.position);
+    m = glm::rotate(m, yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+    if (!yawOnly) {
+        const float horiz = std::sqrt(d.x * d.x + d.z * d.z);
+        const float pitch = -std::atan2(d.y, horiz);
+        m = glm::rotate(m, pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+    }
+    m = glm::scale(m, t.scale);
+    return m;
+}
 
 // ImGui only focuses windows on left-click; focus on right-click too. Call
 // right after a panel's Begin() (window body being drawn) so right-clicking a
@@ -593,16 +611,18 @@ glm::mat4 EditorApp::currentView() {
 
 void EditorApp::renderScene() {
     m_scene.each<Transform, MeshRenderer>(
-        [&](Entity, Transform& t, MeshRenderer& mr) {
+        [&](Entity e, Transform& t, MeshRenderer& mr) {
             const Mesh* mesh = m_assets.mesh(mr.meshAsset);
             if (!mesh) return; // unresolved asset: skip, never crash
             DrawItem item;
             item.mesh = mesh;
-            item.model = t.matrix();
+            item.model = e.has<Billboard>()
+                             ? billboardModel(t, m_camPos, e.get<Billboard>().yawOnly)
+                             : t.matrix();
             item.color = glm::vec3(mr.color);
-            item.color2 = glm::vec3(mr.color);
-            if (!mr.textureAsset.empty())
-                item.texture = m_assets.texture(mr.textureAsset);
+            item.color2 = glm::vec3(mr.color2);
+            item.texture = m_assets.texture(
+                mr.textureAsset.empty() ? "builtin:white" : mr.textureAsset);
             m_renderer.draw(item);
         });
 }
@@ -1167,52 +1187,24 @@ void EditorApp::pickEntity(const glm::vec2& uv) {
     const glm::vec3 origin(p0);
     const glm::vec3 dir = glm::normalize(glm::vec3(p1) - origin);
 
-    entt::registry& reg = m_scene.registry();
+    // AABB pass via the shared raycast (Collider or mesh bounds).
     entt::entity best = entt::null;
     float bestAlong = 1e9f;
+    if (auto hit = raycastScene(m_scene, m_assets, origin, dir, 0.0f)) {
+        best = hit->entity;
+        bestAlong = hit->distance;
+    }
+
+    // Sphere-proxy fallback for entities the AABB pass can't see (no mesh and
+    // no collider) — a nearer proxy hit still wins.
+    entt::registry& reg = m_scene.registry();
     m_scene.each<Transform>([&](Entity e, Transform& t) {
-        // Ray-vs-AABB slab test in entity local space when a mesh is known.
-        const Mesh* mesh = nullptr;
-        if (const auto* mr = reg.try_get<MeshRenderer>(e.handle()))
-            mesh = m_assets.mesh(mr->meshAsset);
-        if (mesh) {
-            const glm::mat4 invModel = glm::inverse(t.matrix());
-            const glm::vec3 lo(invModel * glm::vec4(origin, 1.0f));
-            const glm::vec3 ld(invModel * glm::vec4(dir, 0.0f));
-            float tMin = 0.0f, tMax = 1e9f;
-            bool hit = true;
-            for (int i = 0; i < 3; ++i) {
-                if (std::abs(ld[i]) < 1e-8f) {
-                    if (lo[i] < mesh->localMin[i] || lo[i] > mesh->localMax[i]) {
-                        hit = false;
-                        break;
-                    }
-                    continue;
-                }
-                float t0 = (mesh->localMin[i] - lo[i]) / ld[i];
-                float t1 = (mesh->localMax[i] - lo[i]) / ld[i];
-                if (t0 > t1) std::swap(t0, t1);
-                tMin = std::max(tMin, t0);
-                tMax = std::min(tMax, t1);
-                if (tMin > tMax) {
-                    hit = false;
-                    break;
-                }
-            }
-            if (hit) {
-                // tMin is in local units along an unnormalized direction; map
-                // back to world distance for cross-entity comparison.
-                const glm::vec3 worldHit(
-                    t.matrix() * glm::vec4(lo + ld * tMin, 1.0f));
-                const float along = glm::dot(worldHit - origin, dir);
-                if (along >= 0.0f && along < bestAlong) {
-                    bestAlong = along;
-                    best = e.handle();
-                }
-            }
-            return;
-        }
-        // Fallback: sphere proxy for entities without a resolvable mesh.
+        const bool hasMesh = [&] {
+            const auto* mr = reg.try_get<MeshRenderer>(e.handle());
+            return mr && m_assets.mesh(mr->meshAsset);
+        }();
+        if (hasMesh || reg.all_of<Collider>(e.handle()))
+            return; // handled above
         const glm::vec3 d = t.position - origin;
         const float along = glm::dot(d, dir);
         if (along < 0.0f) return;
@@ -1611,6 +1603,7 @@ void EditorApp::startPlay() {
     ctx.input = &m_window;
     ctx.audio = m_audio.get();
     ctx.assets = &m_assets;
+    ctx.renderer = &m_renderer;
 #if defined(LIMINAL_WITH_INFERENCE)
     // Cheap to construct (no worker until lm.ai.start); created on first Play
     // and reused. stopPlay stops it to free model memory.

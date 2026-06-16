@@ -11,10 +11,30 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <exception>
 
 namespace liminal {
+
+namespace {
+// Model matrix for a billboarded entity: keep position+scale, replace rotation
+// with a camera-facing one. yawOnly -> spin about Y only; else also pitch.
+glm::mat4 billboardModel(const Transform& t, const glm::vec3& camPos,
+                         bool yawOnly) {
+    const glm::vec3 d = camPos - t.position;
+    const float yaw = std::atan2(d.x, d.z); // face the camera about +Y
+    glm::mat4 m = glm::translate(glm::mat4(1.0f), t.position);
+    m = glm::rotate(m, yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+    if (!yawOnly) {
+        const float horiz = std::sqrt(d.x * d.x + d.z * d.z);
+        const float pitch = -std::atan2(d.y, horiz);
+        m = glm::rotate(m, pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+    }
+    m = glm::scale(m, t.scale);
+    return m;
+}
+} // namespace
 
 App::App(const AppConfig& config) {
     m_window = std::make_unique<Window>(config.width, config.height, config.title);
@@ -37,6 +57,7 @@ void App::buildScriptHost() {
     ctx.input = m_window.get();
     ctx.audio = m_audio.get();
     ctx.assets = &m_assets;
+    ctx.renderer = m_renderer.get();
     ctx.hotReload = m_hotReload;
 #if defined(LIMINAL_WITH_INFERENCE)
     // The engine ctor is cheap (no worker thread until lm.ai.start); create it
@@ -75,19 +96,20 @@ glm::mat4 App::primaryCameraView() {
     return view;
 }
 
-void App::renderScene() {
+void App::renderScene(const glm::vec3& camPos) {
     m_scene.each<Transform, MeshRenderer>(
-        [&](Entity, Transform& t, MeshRenderer& mr) {
+        [&](Entity e, Transform& t, MeshRenderer& mr) {
             const Mesh* mesh = m_assets.mesh(mr.meshAsset);
             if (!mesh) return; // unresolved asset: skip, never crash
             DrawItem item;
             item.mesh = mesh;
-            item.model = t.matrix();
+            item.model = e.has<Billboard>()
+                             ? billboardModel(t, camPos, e.get<Billboard>().yawOnly)
+                             : t.matrix();
             item.color = glm::vec3(mr.color);
-            item.color2 = glm::vec3(mr.color);
-            if (!mr.textureAsset.empty()) {
-                item.texture = m_assets.texture(mr.textureAsset);
-            }
+            item.color2 = glm::vec3(mr.color2);
+            item.texture = m_assets.texture(
+                mr.textureAsset.empty() ? "builtin:white" : mr.textureAsset);
             m_renderer->draw(item);
         });
 }
@@ -136,7 +158,7 @@ void App::run(const std::function<void(Frame&)>& frameFn) {
         // visible the same frame).
         m_scripts->update(m_scene, dt);
 
-        renderScene();
+        renderScene(glm::vec3(glm::inverse(view)[3]));
 
         // Deferred scene switch (lm.scene.change). Done at frame end so the
         // current frame finishes rendering the old scene; on success the host

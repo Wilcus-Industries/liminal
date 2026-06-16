@@ -28,10 +28,9 @@
 // known script file; an mtime change re-reads the source and rebuilds every
 // instance of that script from scratch (fresh environment, on_start re-runs).
 //
-// Sandbox: base/math/string/table libraries plus a pruned os table (time,
-// clock, date, difftime survive; execute/remove/rename/exit/getenv/tmpname
-// are stripped). io is not opened at all. The lm.* API surface is bound in
-// src/script/lua_bindings.cpp.
+// Libraries: base/math/string/table/os/io are all opened (full standard-
+// library file access; io/os read the real filesystem, not the mounted pak).
+// The lm.* API surface is bound in src/script/lua_bindings.cpp.
 
 #include <chrono>
 #include <filesystem>
@@ -50,6 +49,7 @@ class Scene;
 class Window;
 class Audio;
 class AssetCache;
+class Renderer;
 #if defined(LIMINAL_WITH_INFERENCE)
 namespace inference { class Engine; }
 #endif
@@ -62,6 +62,7 @@ struct ScriptContext {
     Window* input = nullptr;        // lm.input.key_down
     Audio* audio = nullptr;         // lm.audio.*
     AssetCache* assets = nullptr;   // lm.assets.*
+    Renderer* renderer = nullptr;   // lm.ui / lm.render (plumbing; no API yet)
 #if defined(LIMINAL_WITH_INFERENCE)
     inference::Engine* inference = nullptr; // wired in a later chunk; field now
 #endif
@@ -115,6 +116,16 @@ public:
     // Emit an lm.log line: always prints to stdout, plus the log sink if set.
     void emitLog(const std::string& msg);
 
+    // lm.import(path): project-relative, VFS/pak-aware module loader. Loads the
+    // Lua file once (read pak-first via Assets::readFile), caches its return
+    // value, and hands the SAME object to every importer — shared state across
+    // scripts. A chunk that returns nothing caches `true` (require convention,
+    // so it isn't reloaded). On read/load/run error the error is reported and
+    // lua_nil is returned; importModule never throws out to the caller. Cyclic
+    // imports of the same path return the in-flight placeholder (nil) instead of
+    // looping. Cached for the host's lifetime (no hot reload).
+    sol::object importModule(const std::string& path);
+
 private:
     struct ScriptFile {
         std::string resolved;                    // Assets::resolve result
@@ -141,6 +152,7 @@ private:
     ScriptContext m_ctx;
     Scene* m_scene = nullptr;
     std::unordered_map<std::string, ScriptFile> m_files;      // by script path
+    std::unordered_map<std::string, sol::object> m_modules;   // lm.import cache
     // One entity can run many scripts: each entity maps to a vector of
     // Instances, one per path in its Script.paths.
     std::unordered_map<entt::entity, std::vector<Instance>> m_instances;

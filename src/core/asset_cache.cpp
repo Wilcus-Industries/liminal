@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace liminal {
 
@@ -31,6 +33,36 @@ void splitSeed(const std::string& body, std::string& kind, unsigned int& seed) {
 }
 
 std::optional<Mesh> makeBuiltinMesh(const std::string& body) {
+    // "form:<sides>,<twist>,<taper>[,<seed>]" — the one parametric primitive,
+    // its own parser since splitSeed only handles a single trailing int.
+    // Mesh::form clamps sides/twist/taper internally, so out-of-range inputs
+    // are safe; a bare "form" with no args gives sensible defaults.
+    constexpr const char* kFormPrefix = "form:";
+    if (body == "form" || body.rfind(kFormPrefix, 0) == 0) {
+        const std::string args =
+            body == "form" ? std::string() : body.substr(std::string(kFormPrefix).size());
+        std::vector<std::string> parts;
+        size_t start = 0;
+        while (start <= args.size()) {
+            const size_t comma = args.find(',', start);
+            const size_t end = comma == std::string::npos ? args.size() : comma;
+            parts.push_back(args.substr(start, end - start));
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+        const int sides =
+            parts.size() > 0 && !parts[0].empty() ? std::atoi(parts[0].c_str()) : 5;
+        const float twist =
+            parts.size() > 1 && !parts[1].empty() ? std::strtof(parts[1].c_str(), nullptr) : 0.0f;
+        const float taper =
+            parts.size() > 2 && !parts[2].empty() ? std::strtof(parts[2].c_str(), nullptr) : 0.0f;
+        const unsigned int seed =
+            parts.size() > 3 && !parts[3].empty()
+                ? static_cast<unsigned int>(std::strtoul(parts[3].c_str(), nullptr, 10))
+                : 0u;
+        return Mesh::form(sides, twist, taper, seed);
+    }
+
     std::string kind;
     unsigned int seed = 0;
     splitSeed(body, kind, seed);
@@ -101,6 +133,19 @@ std::string AssetCache::addMesh(const std::string& name, const MeshData& data) {
     m_failed.erase(key); // a name that failed to resolve before now exists
     auto [it, inserted] = m_meshes.try_emplace(key, Mesh(data));
     if (!inserted) it->second = Mesh(data); // overwrite an existing runtime mesh
+    return key;
+}
+
+std::string AssetCache::addTexture(const std::string& name, Texture texture) {
+    constexpr const char* kRuntimePrefix = "runtime:";
+    std::string key =
+        name.rfind(kRuntimePrefix, 0) == 0 ? name : kRuntimePrefix + name;
+    m_failed.erase(key);
+    auto it = m_textures.find(key);
+    if (it == m_textures.end())
+        m_textures.emplace(key, std::move(texture));
+    else
+        it->second = std::move(texture);
     return key;
 }
 

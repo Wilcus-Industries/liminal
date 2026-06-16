@@ -307,6 +307,12 @@ std::optional<Texture> Texture::fromMemory(const unsigned char* bytes,
     return uploadWH(data.get(), w, h, GL_CLAMP_TO_EDGE);
 }
 
+std::optional<Texture> Texture::fromPixels(int w, int h,
+                                           const unsigned char* rgba) {
+    if (w <= 0 || h <= 0 || !rgba) return std::nullopt;
+    return uploadWH(rgba, w, h, GL_CLAMP_TO_EDGE);
+}
+
 Texture Texture::sprite(Sprite kind, int size,
                         const std::vector<glm::vec3>& palette,
                         unsigned int seed) {

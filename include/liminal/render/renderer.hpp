@@ -10,9 +10,11 @@
 // The renderer knows nothing about the app. The app layer hands it DrawItems
 // and mood-flavored settings; that's the whole contract.
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -102,6 +104,20 @@ public:
 
     RenderSettings settings; // live-tweaked by the app between frames
 
+    // Lua-settable render knobs (G3). The first five write into `settings` so
+    // they feed the same per-frame uniform sets beginFrame already does; they
+    // exist so scripts (lm.render) can drive fog/decay/lights without a custom
+    // uniform name. setUniform stores an arbitrary named uniform applied to the
+    // active scene shader each beginFrame (after the fixed sets) — Shader::set
+    // no-ops names the active program doesn't declare.
+    void setFogColor(const glm::vec3& c) { settings.fogColor = c; }
+    void setFogDensity(float d) { settings.fogDensity = d; }
+    void setDecay(float p) { settings.decayProgress = p; }
+    void setLightDir(const glm::vec3& d) { settings.lightDir = d; }
+    void setShadeDir(const glm::vec3& d) { settings.shadeDir = d; }
+    void setUniform(const std::string& name, float v) { m_customUniforms[name] = v; }
+    void setUniform(const std::string& name, const glm::vec3& v) { m_customUniforms[name] = v; }
+
     glm::mat4 projection() const; // perspective from settings + render aspect
 
     // Binds the render FBO (window-sized for native, virtual for retro),
@@ -126,6 +142,17 @@ public:
     // is no allocated FBO, sets w=h=0 and clears rgba.
     void readPixels(std::vector<unsigned char>& rgba, int& w, int& h) const;
 
+    // Immediate-mode screen-space 2D (origin top-left, render-target pixels).
+    // Queued each frame and flushed into the render FBO at the top of endFrame
+    // (so it shows in the player blit, the editor FBO image, and screenshots).
+    // Backs lm.ui. color is RGBA 0..1.
+    void uiText(float x, float y, const std::string& text,
+                const glm::vec4& color, float scale = 1.0f);
+    void uiRect(float x, float y, float w, float h, const glm::vec4& color);
+    void uiLine(float x0, float y0, float x1, float y1,
+                const glm::vec4& color, float thickness = 1.0f);
+    void uiSize(int& w, int& h) const { w = m_renderW; h = m_renderH; }
+
     // A registered pack's compiled programs plus the resolution it renders at.
     // Aggregate: Shader is move-only, so brace-init with moved Shaders works.
     // Public only so the .cpp's compile helper can name it; not part of the
@@ -147,6 +174,9 @@ private:
     CompiledShader* m_active = nullptr;
     std::string m_activeName;
 
+    std::unordered_map<std::string, std::variant<float, glm::vec3>>
+        m_customUniforms; // applied to the active scene shader each beginFrame
+
     unsigned int m_fbo = 0;
     unsigned int m_colorTex = 0;
     unsigned int m_depthRbo = 0;
@@ -155,6 +185,23 @@ private:
 
     unsigned int m_fsVao = 0; // fullscreen triangle
     unsigned int m_fsVbo = 0;
+
+    // Immediate-mode 2D UI. Two batches (solid white-texel vs glyph atlas)
+    // queued by uiRect/uiLine/uiText and flushed into the FBO by flushUi at the
+    // top of endFrame, while the scene FBO is still bound.
+    struct UiVert { float x, y, u, v, r, g, b, a; };
+    static void pushQuad(std::vector<UiVert>& batch, float x0, float y0,
+                         float x1, float y1, float u0, float v0, float u1,
+                         float v1, const glm::vec4& c);
+    void flushUi();          // draws m_uiSolid then m_uiText into the bound FBO
+    void buildUiResources(); // font atlas + 1x1 white tex + 2D program + VAO/VBO
+    std::vector<UiVert> m_uiSolid; // rects/lines (white texel)
+    std::vector<UiVert> m_uiText;  // glyph quads (font atlas)
+    std::unique_ptr<Shader> m_uiShader;
+    unsigned int m_fontTex = 0;
+    unsigned int m_whiteTex2d = 0;
+    unsigned int m_uiVao = 0, m_uiVbo = 0;
+    int m_fontAtlasW = 0, m_fontAtlasH = 0; // px
 };
 
 // Process-global list of selectable shader pack names. The renderer does not

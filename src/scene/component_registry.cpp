@@ -18,6 +18,9 @@ void bindName(void* luaState);
 void bindTransform(void* luaState);
 void bindMeshRenderer(void* luaState);
 void bindCamera(void* luaState);
+void bindLight(void* luaState);
+void bindCollider(void* luaState);
+void bindBillboard(void* luaState);
 } // namespace liminal::luabind
 #define LIMINAL_LUABIND(fn) (&liminal::luabind::fn)
 
@@ -101,17 +104,22 @@ void registerMeshRenderer(ComponentRegistry& r) {
         [](const MeshRenderer& c) {
             return nlohmann::json{{"meshAsset", c.meshAsset},
                                   {"color", c.color},
+                                  {"color2", c.color2},
                                   {"textureAsset", c.textureAsset}};
         },
         [](MeshRenderer& c, const nlohmann::json& j) {
             c.meshAsset = j.value("meshAsset", "builtin:box");
             c.color = j.value("color", glm::vec4(1.0f));
+            // color2 defaults to the parsed color so older scenes without it
+            // render uniform, exactly as before the gradient field existed.
+            c.color2 = j.value("color2", c.color);
             c.textureAsset = j.value("textureAsset", "");
         },
         [](MeshRenderer& c) {
             inputTextString("mesh", c.meshAsset);
             inputTextString("texture", c.textureAsset);
             ImGui::ColorEdit4("color", &c.color.x);
+            ImGui::ColorEdit4("color2", &c.color2.x);
         },
         LIMINAL_LUABIND(bindMeshRenderer));
 }
@@ -186,7 +194,8 @@ void registerLight(ComponentRegistry& r) {
         [](Light& c) {
             ImGui::ColorEdit3("color", &c.color.x);
             ImGui::SliderFloat("intensity", &c.intensity, 0.0f, 10.0f);
-        });
+        },
+        LIMINAL_LUABIND(bindLight));
 }
 
 void registerScript(ComponentRegistry& r) {
@@ -219,6 +228,37 @@ void registerScript(ComponentRegistry& r) {
         });
 }
 
+void registerCollider(ComponentRegistry& r) {
+    r.registerComponent<Collider>(
+        "Collider",
+        [](const Collider& c) {
+            return nlohmann::json{{"center", c.center},
+                                  {"halfExtents", c.halfExtents}};
+        },
+        [](Collider& c, const nlohmann::json& j) {
+            c.center = j.value("center", glm::vec3(0.0f));
+            c.halfExtents = j.value("halfExtents", glm::vec3(0.0f));
+        },
+        [](Collider& c) {
+            ImGui::DragFloat3("center", &c.center.x, 0.05f);
+            ImGui::DragFloat3("half extents", &c.halfExtents.x, 0.05f);
+        },
+        LIMINAL_LUABIND(bindCollider));
+}
+
+void registerBillboard(ComponentRegistry& r) {
+    r.registerComponent<Billboard>(
+        "Billboard",
+        [](const Billboard& c) {
+            return nlohmann::json{{"yawOnly", c.yawOnly}};
+        },
+        [](Billboard& c, const nlohmann::json& j) {
+            c.yawOnly = j.value("yawOnly", true);
+        },
+        [](Billboard& c) { ImGui::Checkbox("yaw only", &c.yawOnly); },
+        LIMINAL_LUABIND(bindBillboard));
+}
+
 } // namespace
 
 void registerBuiltinComponents() {
@@ -233,6 +273,8 @@ void registerBuiltinComponents() {
     registerAudioSource(r);
     registerLight(r);
     registerScript(r);
+    registerCollider(r);
+    registerBillboard(r);
 }
 
 } // namespace liminal

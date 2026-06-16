@@ -35,7 +35,10 @@ int main() {
     crate.add<liminal::MeshRenderer>(
         {.meshAsset = "builtin:box",
          .color = {0.8f, 0.6f, 0.4f, 1.0f},
+         .color2 = {0.1f, 0.2f, 0.9f, 1.0f},
          .textureAsset = "builtin:checker"});
+    crate.add<liminal::Collider>(
+        {.center = {0.0f, 0.5f, 0.0f}, .halfExtents = {0.5f, 1.0f, 0.5f}});
 
     liminal::Entity cam = scene.create("camera");
     cam.add<liminal::Transform>({.position = {0.0f, 4.0f, 8.0f}});
@@ -45,6 +48,7 @@ int main() {
     mood.add<liminal::Light>({.color = {1.0f, 0.9f, 0.7f}, .intensity = 0.8f});
     mood.add<liminal::AudioSource>({.gain = 0.2f, .enabled = true});
     mood.add<liminal::Script>({.paths = {"scripts/spin.lua"}});
+    mood.add<liminal::Billboard>({.yawOnly = false});
 
     const fs::path path =
         fs::temp_directory_path() / "liminal_test_roundtrip.lscene";

@@ -18,9 +18,15 @@
 #include <sstream>
 #include <stdexcept>
 #include <utility>
+#include <variant>
+
+#include <cmath>
+#include <vector>
 
 #include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>
+
+#include <liminal/render/font8x8.hpp>
 
 // Configure-time embed of assets/shaders/retro/* (see CMakeLists). Gives the
 // default-constructed Renderer its shaders with zero filesystem access.
@@ -178,6 +184,9 @@ void Renderer::buildPipeline() {
 
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    // 2D UI resources (font atlas, white texel, program, batch VAO/VBO).
+    buildUiResources();
     } catch (...) {
         // Partially-constructed object: ~Renderer won't run, so free any GL
         // objects created so far before rethrowing.
@@ -189,9 +198,213 @@ void Renderer::buildPipeline() {
             glDeleteBuffers(1, &m_fsVbo);
             m_fsVbo = 0;
         }
+        if (m_uiVao) {
+            glDeleteVertexArrays(1, &m_uiVao);
+            m_uiVao = 0;
+        }
+        if (m_uiVbo) {
+            glDeleteBuffers(1, &m_uiVbo);
+            m_uiVbo = 0;
+        }
+        if (m_fontTex) {
+            glDeleteTextures(1, &m_fontTex);
+            m_fontTex = 0;
+        }
+        if (m_whiteTex2d) {
+            glDeleteTextures(1, &m_whiteTex2d);
+            m_whiteTex2d = 0;
+        }
+        m_uiShader.reset();
         destroyTargets();
         throw;
     }
+}
+
+// One-time GL setup for the immediate-mode 2D UI pass: bakes the 8x8 font atlas
+// + a 1x1 white texel, compiles the textured-color 2D program, and allocates a
+// dynamic VAO/VBO the per-frame batches stream into (uploaded in flushUi).
+void Renderer::buildUiResources() {
+    // --- Font atlas: glyphs 0x20..0x7E into a 16-column grid (95 glyphs). ---
+    constexpr int kCols = 16;
+    constexpr int kGlyphs = 95; // 0x20..0x7E
+    constexpr int kRows = (kGlyphs + kCols - 1) / kCols; // 6
+    m_fontAtlasW = kCols * 8;  // 128
+    m_fontAtlasH = kRows * 8;  // 48
+    std::vector<unsigned char> atlas(
+        static_cast<std::size_t>(m_fontAtlasW) * m_fontAtlasH * 4, 0);
+    for (int i = 0; i < kGlyphs; ++i) {
+        const int c = 0x20 + i;
+        const int col = i % kCols;
+        const int row = i / kCols;
+        for (int ry = 0; ry < 8; ++ry) {
+            const unsigned char bits = kFont8x8Basic[c][ry];
+            for (int rx = 0; rx < 8; ++rx) {
+                if (!((bits >> rx) & 1)) continue;
+                const int px = col * 8 + rx;
+                const int py = row * 8 + ry;
+                const std::size_t idx =
+                    (static_cast<std::size_t>(py) * m_fontAtlasW + px) * 4;
+                atlas[idx + 0] = 255;
+                atlas[idx + 1] = 255;
+                atlas[idx + 2] = 255;
+                atlas[idx + 3] = 255;
+            }
+        }
+    }
+    glGenTextures(1, &m_fontTex);
+    glBindTexture(GL_TEXTURE_2D, m_fontTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_fontAtlasW, m_fontAtlasH, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, atlas.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // --- 1x1 white texel for solid rects/lines (FragColor = vColor). ---
+    const unsigned char white[4] = {255, 255, 255, 255};
+    glGenTextures(1, &m_whiteTex2d);
+    glBindTexture(GL_TEXTURE_2D, m_whiteTex2d);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, white);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // --- 2D program: ortho-projected textured vertex color. ---
+    static const char* kUiVert = R"GLSL(#version 410 core
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec2 aUV;
+layout(location=2) in vec4 aColor;
+uniform mat4 uProj;
+out vec2 vUV; out vec4 vColor;
+void main(){ vUV=aUV; vColor=aColor; gl_Position=uProj*vec4(aPos,0.0,1.0); }
+)GLSL";
+    static const char* kUiFrag = R"GLSL(#version 410 core
+in vec2 vUV; in vec4 vColor;
+uniform sampler2D uTex;
+out vec4 FragColor;
+void main(){ FragColor = vColor * texture(uTex, vUV); }
+)GLSL";
+    m_uiShader = std::make_unique<Shader>(
+        Shader::fromSource(kUiVert, kUiFrag, "ui2d"));
+
+    // --- Dynamic batch VAO/VBO: interleaved pos2 | uv2 | color4 (8 floats). ---
+    glGenVertexArrays(1, &m_uiVao);
+    glGenBuffers(1, &m_uiVbo);
+    glBindVertexArray(m_uiVao);
+    glBindBuffer(GL_ARRAY_BUFFER, m_uiVbo);
+    const GLsizei stride = 8 * sizeof(float);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride,
+                          (const void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride,
+                          (const void*)(4 * sizeof(float)));
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+// Two triangles (6 verts) for a quad in screen space with the given UVs.
+void Renderer::pushQuad(std::vector<UiVert>& batch, float x0, float y0,
+                        float x1, float y1, float u0, float v0, float u1,
+                        float v1, const glm::vec4& c) {
+    const UiVert tl{x0, y0, u0, v0, c.r, c.g, c.b, c.a};
+    const UiVert bl{x0, y1, u0, v1, c.r, c.g, c.b, c.a};
+    const UiVert br{x1, y1, u1, v1, c.r, c.g, c.b, c.a};
+    const UiVert tr{x1, y0, u1, v0, c.r, c.g, c.b, c.a};
+    batch.push_back(tl);
+    batch.push_back(bl);
+    batch.push_back(br);
+    batch.push_back(tl);
+    batch.push_back(br);
+    batch.push_back(tr);
+}
+
+void Renderer::uiRect(float x, float y, float w, float h,
+                      const glm::vec4& color) {
+    pushQuad(m_uiSolid, x, y, x + w, y + h, 0.0f, 0.0f, 0.0f, 0.0f, color);
+}
+
+void Renderer::uiText(float x, float y, const std::string& text,
+                      const glm::vec4& color, float scale) {
+    const float adv = 8.0f * scale;
+    const float fw = (float)m_fontAtlasW;
+    const float fh = (float)m_fontAtlasH;
+    float cursor = x;
+    for (unsigned char c : text) {
+        if (c >= 0x20 && c <= 0x7E) {
+            const int gi = c - 0x20;
+            const int col = gi % 16;
+            const int row = gi / 16;
+            const float u0 = (col * 8) / fw;
+            const float v0 = (row * 8) / fh;
+            const float u1 = (col * 8 + 8) / fw;
+            const float v1 = (row * 8 + 8) / fh;
+            pushQuad(m_uiText, cursor, y, cursor + adv, y + adv, u0, v0, u1, v1,
+                     color);
+        }
+        cursor += adv; // space + out-of-range chars advance without drawing
+    }
+}
+
+void Renderer::uiLine(float x0, float y0, float x1, float y1,
+                      const glm::vec4& color, float thickness) {
+    const float dx = x1 - x0;
+    const float dy = y1 - y0;
+    const float len = std::sqrt(dx * dx + dy * dy);
+    if (len < 1e-6f) return; // degenerate
+    const float nx = dx / len;
+    const float ny = dy / len;
+    // Perpendicular, scaled to half the thickness.
+    const float px = -ny * thickness * 0.5f;
+    const float py = nx * thickness * 0.5f;
+    // Four corners → two triangles. uv = 0 (white texel).
+    const glm::vec4& c = color;
+    const UiVert a{x0 + px, y0 + py, 0, 0, c.r, c.g, c.b, c.a};
+    const UiVert b{x0 - px, y0 - py, 0, 0, c.r, c.g, c.b, c.a};
+    const UiVert d{x1 - px, y1 - py, 0, 0, c.r, c.g, c.b, c.a};
+    const UiVert e{x1 + px, y1 + py, 0, 0, c.r, c.g, c.b, c.a};
+    m_uiSolid.push_back(a);
+    m_uiSolid.push_back(b);
+    m_uiSolid.push_back(d);
+    m_uiSolid.push_back(a);
+    m_uiSolid.push_back(d);
+    m_uiSolid.push_back(e);
+}
+
+void Renderer::flushUi() {
+    if (m_uiSolid.empty() && m_uiText.empty()) return;
+    glViewport(0, 0, m_renderW, m_renderH);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    m_uiShader->use();
+    // Ortho, origin top-left: x 0..W, y 0..H (y down).
+    const glm::mat4 proj = glm::ortho(0.0f, (float)m_renderW,
+                                      (float)m_renderH, 0.0f, -1.0f, 1.0f);
+    m_uiShader->set("uProj", proj);
+    m_uiShader->set("uTex", 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArray(m_uiVao);
+    auto drawBatch = [&](std::vector<UiVert>& b, unsigned int tex) {
+        if (b.empty()) return;
+        glBindBuffer(GL_ARRAY_BUFFER, m_uiVbo);
+        glBufferData(GL_ARRAY_BUFFER, b.size() * sizeof(UiVert), b.data(),
+                     GL_STREAM_DRAW);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)b.size());
+    };
+    drawBatch(m_uiSolid, m_whiteTex2d);
+    drawBatch(m_uiText, m_fontTex);
+    glBindVertexArray(0);
+    glDisable(GL_BLEND);
+    m_uiSolid.clear();
+    m_uiText.clear();
 }
 
 Renderer::Renderer() {
@@ -286,6 +499,11 @@ Renderer::~Renderer() {
     destroyTargets();
     if (m_fsVao) glDeleteVertexArrays(1, &m_fsVao);
     if (m_fsVbo) glDeleteBuffers(1, &m_fsVbo);
+    if (m_uiVao) glDeleteVertexArrays(1, &m_uiVao);
+    if (m_uiVbo) glDeleteBuffers(1, &m_uiVbo);
+    if (m_fontTex) glDeleteTextures(1, &m_fontTex);
+    if (m_whiteTex2d) glDeleteTextures(1, &m_whiteTex2d);
+    // m_uiShader's dtor frees the GL program.
 }
 
 void Renderer::createTargets() {
@@ -415,6 +633,12 @@ void Renderer::beginFrame(const glm::mat4& view, int windowFbWidth,
     scene.set("uSnapRes",
               glm::vec2((float)settings.virtualW,
                         (float)settings.virtualH) * settings.snapScale);
+
+    // Lua-set custom uniforms last so they can override anything above. Unknown
+    // names are silently ignored by Shader::set (no such active uniform).
+    for (const auto& [name, value] : m_customUniforms) {
+        std::visit([&](const auto& v) { scene.set(name.c_str(), v); }, value);
+    }
 }
 
 void Renderer::draw(const DrawItem& item) {
@@ -478,6 +702,11 @@ void Renderer::readPixels(std::vector<unsigned char>& rgba, int& w, int& h) cons
 }
 
 void Renderer::endFrame(int windowFbWidth, int windowFbHeight) {
+    // Draw queued 2D UI into the scene FBO while it is STILL bound (before the
+    // bind-0 below), so it shows in the blit, the editor FBO image, and
+    // screenshots. flushUi clears the batches.
+    flushUi();
+
     // Back to the default framebuffer (the window). From here on we are
     // drawing a single textured triangle; depth testing would only let
     // stale window-depth garbage reject our pixels.

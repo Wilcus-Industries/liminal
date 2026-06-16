@@ -72,6 +72,12 @@ public:
     static std::optional<Texture> fromMemory(const unsigned char* bytes,
                                              std::size_t len);
 
+    // Builds an RGBA8 texture from a raw pixel buffer (w*h*4 bytes, row-major,
+    // top-left origin). Same nearest / CLAMP_TO_EDGE contract as fromMemory —
+    // backs lm.assets.add_texture(name, w, h, pixels). Empty optional if w/h <= 0.
+    static std::optional<Texture> fromPixels(int w, int h,
+                                             const unsigned char* rgba);
+
     // Width / height of the source image (billboard quads scale by this).
     // 1.0 for the square procedural textures.
     float aspect() const { return m_aspect; }
