@@ -138,6 +138,7 @@ add_library(liminal STATIC
     src/scene/components.cpp
     src/scene/component_registry.cpp
     src/scene/serialize.cpp
+    src/scene/raycast.cpp
     src/render/shader.cpp
     src/render/mesh.cpp
     src/render/texture.cpp

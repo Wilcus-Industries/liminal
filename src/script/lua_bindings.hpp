@@ -35,6 +35,9 @@ void bindName(void* luaState);
 void bindTransform(void* luaState);
 void bindMeshRenderer(void* luaState);
 void bindCamera(void* luaState);
+void bindLight(void* luaState);
+void bindCollider(void* luaState);
+void bindBillboard(void* luaState);
 
 } // namespace luabind
 } // namespace liminal

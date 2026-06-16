@@ -40,7 +40,10 @@ src/
              Window*), Window (GLFW+glad RAII, input), Assets (search-path resolution
              + VFS: readFile / mountPak read through a mounted pak first), AssetCache
              (name → GPU resource, "builtin:"-prefixed procedural meshes/textures,
-             warn-once failures; addMesh returns the stored "runtime:" key),
+             warn-once failures; addMesh returns the stored "runtime:" key;
+             addTexture(name,Texture) likewise returns a "runtime:" key (backs
+             lm.assets.add_texture). builtin: mesh names include the parametric
+             "builtin:form:<sides>,<twist>,<taper>[,<seed>]" (→ Mesh::form)),
              pak (LMPK\0v01-footer archive: buildGamePak helper packs project files
              + synthesizes project.ljson carrying width/height through from the
              source; PakWriter::add drops paths > 65535 bytes; player reads it),
@@ -82,7 +85,17 @@ src/
              std::vector<std::string>& shaderCatalog() lists selectable pack names
              for UI (filled by editor/player after registering; renderer never reads
              it). colorTexture() getter for editor; readPixels(rgba,w,h) reads the
-             color FBO back to RGBA8 bottom-up — backs the MCP screenshot tool),
+             color FBO back to RGBA8 bottom-up — backs the MCP screenshot tool.
+             Immediate-mode 2D pass (backs lm.ui): buildUiResources() (called at
+             the end of buildPipeline) bakes a 128x48 font atlas from the engine-
+             baked public-domain 8x8 bitmap font include/liminal/render/font8x8.hpp
+             (NOT the editor JetBrains Mono), a 1x1 white texture, a "ui2d" ortho
+             textured+tinted program, and a dynamic VAO/VBO. uiText/uiRect/uiLine/
+             uiSize push into m_uiSolid/m_uiText batches; flushUi() is the FIRST
+             statement of endFrame (FBO still bound, top-left ortho, alpha blend,
+             solids then text, batches cleared) so UI lands in the scene FBO — shows
+             in player blit, editor Image, MCP screenshot; in retro it lands in the
+             400x300 virtual FBO),
              Shader (throws on compile/link
              fail), Mesh (interleaved pos|normal|uv, flat-shaded, no index buffer,
              procedural primitives; shares the deterministic hashU32 noise
@@ -99,13 +112,33 @@ src/
              inspector shows a dropdown over shaderCatalog() (free-text InputText
              fallback when the catalog is empty), Lua-bound — Camera usertype exposes
              fov/near/far/primary/shader so scripts can switch the per-camera shader
-             at runtime), AudioSource,
-             Light, Script (holds a `paths` vector — an entity may run multiple
+             at runtime), MeshRenderer now carries color2 (vec4 gradient TOP tint;
+             color = bottom; fromJson defaults color2→color for back-compat;
+             set_color also sets color2 = flat tint unless set_color2 used; both
+             Lua-bound), AudioSource,
+             Light (Lua-bound via bindLight: color/intensity + set_color, G4),
+             Collider ({center, halfExtents}; zero halfExtents = derive from mesh
+             bounds at query; Lua-bound center/half_extents; backs lm.physics),
+             Billboard ({yawOnly=true}: entities with this have their model
+             matrix rebuilt each frame to face the active camera — position+scale
+             kept, rotation replaced; yawOnly spins about Y only, false also pitches
+             toward the camera; applied in App::renderScene(const glm::vec3& camPos)
+             and EditorApp::renderScene via a file-local billboardModel helper in
+             each render TU — App gets the cam world pos = inverse(view)[3], the
+             editor uses its m_camPos member),
+             Script (holds a `paths` vector — an entity may run multiple
              scripts; legacy single-`path` JSON still loads via a fromJson fallback);
              Transform euler order yaw→pitch→roll = Y→X→Z),
              ComponentRegistry (name → toJson/fromJson/inspect/Lua-bind, singleton),
              serialize (.lscene JSON v1; entities sorted by entt id for stable output;
-             unknown components warn+skip; entity IDs NOT preserved across load)
+             unknown components warn+skip; entity IDs NOT preserved across load),
+             raycast (raycastScene(scene, assets, origin, dir, maxDist) → optional
+             RayHit{entity, point, normal, distance}: nearest entity whose local
+             AABB the ray hits — Collider center±halfExtents when non-degenerate,
+             else resolved mesh localMin/localMax; slab test in entity-local space,
+             maxDist<=0 = unbounded. Shared by the editor pick (editor_app.cpp
+             pickEntity, which keeps a sphere-proxy fallback for entities with no
+             mesh+no collider) and lm.physics)
   script/    ScriptHost (one sol::state, one sol::environment per (entity,path)
              instance — multiple scripts per entity, m_instances keyed
              entity → vector<Instance>; on_start/on_update; pcall error dedup;
@@ -113,10 +146,32 @@ src/
              changed path; setErrorSink routes [lua] errors and setLogSink routes
              lm.log output to a host sink — both always print to stdout/stderr too,
              the editor wires both into its console),
-             lua_bindings (glm vecs, Entity usertype, get_component pointers frame-local
+             FULL io + os libraries opened in the ctor (G2: sol::lib::io added, the
+             old os-pruning loop deleted — scripts get complete stdlib file access;
+             io reads the real filesystem, NOT the mounted pak, documented residual);
+             m_modules map + importModule back lm.import),
+             lua_bindings (glm vecs, Entity usertype with add_component(name,table?)/
+             remove_component(name)/has_component(name) (G6: table→luaToJson→
+             ComponentOps::fromJson, the MCP set_component path from Lua),
+             get_component pointers frame-local
              only; the `lm` global is wired from a ScriptContext{input, audio, assets,
-             inference, hotReload, requestSceneChange} that replaced the old Window* ctor).
+             renderer, inference, hotReload, requestSceneChange} that replaced the old
+             Window* ctor).
              lm.* API surface:
+               lm.log     — print to the engine console (host log sink)
+               lm.json    — encode(value)→string / decode(string)→value (G9;
+                            contiguous 1..n int keys ⇄ array else object; decode
+                            raises a Lua error on malformed input)
+               lm.import  — import(path)→cached module value (G5; VFS pak-first,
+                            run once in the shared state, same object returned to
+                            every caller = shared code+state across entity scripts;
+                            cycle-safe nil placeholder; never throws)
+               lm.ui      — immediate-mode screen-space 2D into the scene FBO (G1;
+                            text(x,y,str,r,g,b[,a][,scale]) / rect(x,y,w,h,r,g,b[,a])
+                            / quad (alias of rect) / line(x0,y0,x1,y1,r,g,b[,a][,thick])
+                            / size()→(w,h); origin top-left, render-target pixels;
+                            via bindUi → Renderer::uiText/uiRect/uiLine/uiSize, flushed
+                            in flushUi() at the top of endFrame while the FBO is bound)
                lm.scene   — find / create / find_all / each / destroy / change (scene swap)
                lm.input   — key_down (char or GLFW keycode) / mouse_down /
                             mouse_delta (accumulated cursor delta, zeroed on read) /
@@ -128,8 +183,30 @@ src/
                lm.procgen — full pipeline (lua_bindings_procgen.cpp): rng / terrain /
                             terrain_mask / stamp_footprint / solve_wfc / grid_from /
                             validate / build_building / collect_runs / build_deck /
-                            terrain_mesh / water_mesh, plus the one-shot town{seed=…}
-               lm.assets  — add_mesh (register a runtime: mesh)
+                            terrain_mesh / water_mesh, plus the one-shot town{seed=…}.
+                            HeightField usertype also exposes height_at_world(x,z) /
+                            walkable_at_world(x,z) (bilinear, mirrors
+                            TerrainField::height; walkable = not underwater)
+               lm.assets  — add_mesh (register a runtime: mesh) / add_texture
+                            (G10; (name,path) via VFS+Texture::fromMemory OR
+                            (name,w,h,pixels_table) via Texture::fromPixels →
+                            AssetCache::addTexture, returns runtime: key)
+               lm.render  — set_fog(r,g,b,density) / set_decay(p) / set_light(x,y,z) /
+                            set_shade(x,y,z) (write into Renderer.settings, feeding the
+                            same per-frame uniform sets beginFrame does) / set_uniform(
+                            name, number|vec3) (arbitrary named uniform applied to the
+                            active scene shader each beginFrame, after the fixed sets —
+                            Shader::set no-ops names the active program doesn't declare;
+                            lets custom shader packs react per-area / to a decay clock).
+                            All resolve through ScriptContext.renderer; warn-once no-op
+                            in a renderer-less host. (G3: lua_bindings.cpp bindRender;
+                            Renderer::setFogColor/setFogDensity/setDecay/setLightDir/
+                            setShadeDir/setUniform + m_customUniforms map in renderer.hpp)
+               lm.physics — raycast(origin, dir [,maxDist]) → {entity, point,
+                            normal, distance} or nil (over the active scene's
+                            Collider/mesh AABBs via scene/raycast.cpp;
+                            maxDist default 0 = unbounded) / overlap(a, b) →
+                            bool (world-AABB intersection of two Entities)
   procgen/   rng (deterministic xorshift32, per-stage salted seeding), types (plain
              structs between stages), wfc (tiled-model WFC, weighted picks, restart on
              contradiction with seed+1), tileset (JSON overlay on compiled-in fallback),
@@ -349,7 +426,11 @@ player/      liminal-player: standalone runtime. Locates its pak (appended to it
              Camera.shaderName resolves at runtime. No shaders/ in the pak = no-op
 tests/       test_scene_roundtrip (JSON byte-stability of all components),
              test_procgen_determinism (FNV-1a hash of full pipeline vs golden),
-             test_lua_procgen (Lua procgen determinism), test_pak_roundtrip,
+             test_lua_procgen (Lua procgen determinism), test_lua_api
+             (headless lm.json round-trip + lm.import shared-state cache +
+             raycastScene Collider-AABB hit/miss + mass create/destroy via a
+             Script — the lm.scene.each collect-then-destroy UAF regression),
+             test_pak_roundtrip,
              test_build_pak
 assets/shaders/  native/ (scene.vert + scene.frag — the default crisp pack) and
              retro/ (dream.vert/.frag scene pass + blit.vert/.frag upscale, the PS1
@@ -369,15 +450,17 @@ cmake/
 
 ## Known issues / accepted limitations
 
-All bugs and notable risks from the 2026-06-12 review were fixed on 2026-06-12 (editor picking via gizmo-freshness gate + ray-vs-AABB, Entity/Lua null guards, CMake C++ standard save/restore around llama fetch, `LIMINAL_EDITOR_SAMPLE_PROJECT` cache var, renderer ctor exception safety, stbi RAII guard, console ListClipper + 1000-line cap). Remaining accepted limitations:
+All bugs and notable risks from the 2026-06-12 review were fixed on 2026-06-12 (editor picking via gizmo-freshness gate + ray-vs-AABB, Entity/Lua null guards, CMake C++ standard save/restore around llama fetch, `LIMINAL_EDITOR_SAMPLE_PROJECT` cache var, renderer ctor exception safety, stbi RAII guard, console ListClipper + 1000-line cap).
+
+2026-06-15: fixed an editor SIGSEGV (UAF) when a Lua script stored entities from `lm.scene.each` / `lm.scene.find_all` and used them after the callback (the "collect-then-destroy" pattern, e.g. a `clear_world()` mass-destroy). Both binders passed/stored the C++ `Entity` **lvalue**, so sol2 handed Lua a *reference* to a reused stack local; after the call the slot held garbage, and `entity:destroy()` dereferenced a non-null garbage `Scene*` in `Entity::valid()`. Fix: push Lua-OWNED copies — `each` calls `fn(Entity(h, sc))` (rvalue), `find_all` stores `sol::make_object(sv, e)` (`src/script/lua_bindings.cpp`). Invariant: when handing a C++ value-handle (`Entity`) to Lua, always pass an rvalue or `make_object` so Lua owns the copy; never the lvalue (which binds by reference). Covered by `tests/test_lua_api.cpp` `testMassDestroy` (build N entities → `each`-collect → `:destroy()` → rebuild; asserts none survive). Note the *separate*, still-current hazard below: raw component pointers from `get_*`/`get_component` stay frame-local. Remaining accepted limitations:
 
 - macOS shipped games are an exe + `.pak` sidecar pair (codesigning rejects a Mach-O with data appended after the load commands); Windows/Linux append the pak into a single exe.
 - The editor Terminal panel is POSIX-only (macOS/Linux via forkpty). On Windows `liminal::Pty` is a stub (ConPTY not yet implemented): `spawn()` returns false and the panel shows an "unsupported on this platform" banner. Color emoji is out of scope (256-color + box-drawing only; no freetype/color-glyph wiring). The panel has no type/font-mismatch protection beyond requiring a monospace UI font (JetBrains Mono provides this) — cell metrics use `CalcTextSizeA("M")` × `GetFontSize()`.
-- `runtime:` meshes registered via `lm.assets.add_mesh` don't survive a scene reload unless the script re-registers them.
+- `runtime:` meshes/textures registered via `lm.assets.add_mesh`/`add_texture` DO survive a scene reload, play/stop, and `lm.scene.change`: the `AssetCache` is a value member of `App`/`EditorApp` that is never reconstructed on those paths (only the `Scene` + `ScriptHost` are rebuilt), so the keys persist for the cache's lifetime. They are lost only when the cache itself is destroyed (editor Close Project, or process exit). Scripts may still re-register idempotently in `on_start` (a re-add overwrites), but it isn't required for the key to resolve after a reload.
 - Scripts using `lm.ai` must call `forget(id)` after a request completes, or responses accumulate.
 - `lm.scene.change` is unsupported during editor Play (the scene swap is deferred only in the player).
 - Custom shaders: a frag-only file (`shaders/<name>.frag`) is a fragment BODY ONLY — the engine prepends `#version 410 core`, the varyings (vNormal, vViewDist, vGradT, smooth vUV) and the per-draw uniforms (uTex, uColor, uColor2, uLightDir, uAlphaTest) + supplies the native vertex stage; the file must contain just `void main(){ ... FragColor = ...; }` (no #version / in / out / uniform decls). Full packs (`shaders/<name>/scene.vert`+`scene.frag`) own both stages: attribute locations 0=pos 1=normal 2=uv, may read any per-draw uniform (uModel/uView/uProj/uNormalMat/uColor/uColor2/uGradBase/uGradInv/uTex/uLightDir + retro-only ones; unused are harmless). Discovered/custom shaders always render at Native (window) resolution.
-- Editor gizmo euler composition (ImGuizmo XYZ vs Transform Y→X→Z) approximates compound rotations — documented in `drawGizmo`.
+- `lm.ui` is single-material flat 2D (engine-baked 8x8 bitmap font, no kerning/Unicode beyond printable ASCII); in the retro pack it lands in the 400x300 virtual FBO and upscales with the scene. Per-vertex MeshRenderer color is a top/bottom gradient (color2) only — per-submesh material slots are out of scope (G14): a mesh draws with one color/texture pair.
 - Script editor completion popup position mirrors private upstream layout math (gutter = " maxline " + 10px mLeftMargin, line advance = bare font height, child scroll queried by recomposing BeginChild's window name via imgui_internal) — re-verify if the ImGuiColorTextEdit or ImGui pin changes. No type inference: `:` on any identifier offers Entity methods. Script-editor tab bar is intentionally not Reorderable (tab IDs are positional). Enter auto-indent is forced on for all language definitions via a mutated copy of the def in `ScriptEditorPanel::open` (upstream Lua def ships with `mAutoIndentation=false`, which disables leading-whitespace copy on newline).
 
 Editor picking notes: clicks gate on `ImGuizmo::IsOver()` ONLY on frames where `drawGizmo` actually called `Manipulate` (returns bool) — IsOver is stale otherwise. `pickEntity` slab-tests the ray in entity-local space against the mesh's `localMin/localMax` when a MeshRenderer resolves, sphere fallback otherwise; miss = deselect.

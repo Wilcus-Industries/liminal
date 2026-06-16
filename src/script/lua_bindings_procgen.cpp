@@ -27,6 +27,7 @@
 #include <liminal/procgen/wfc.hpp>
 #include <liminal/render/mesh.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -214,6 +215,49 @@ void bindUsertypes(sol::state& lua) {
         "tile_underwater",
         [](pg::HeightField& hf, int x, int z) {
             return hf.tileUnderwater(x, z);
+        },
+        // Bilinear height sample at a WORLD position (mirrors
+        // TerrainField::height). Grid spans world [-half, +half] with `cell`
+        // spacing across `nodes` points.
+        "height_at_world",
+        [](pg::HeightField& hf, float x, float z) -> float {
+            if (hf.nodes < 2 || hf.heights.empty())
+                return 0.0f;
+            const float gx = std::clamp(
+                (x + hf.half) / hf.cell, 0.0f,
+                static_cast<float>(hf.nodes - 1) - 1e-4f);
+            const float gz = std::clamp(
+                (z + hf.half) / hf.cell, 0.0f,
+                static_cast<float>(hf.nodes - 1) - 1e-4f);
+            const int ix = static_cast<int>(gx), iz = static_cast<int>(gz);
+            const float tx = gx - ix, tz = gz - iz;
+            const float a = hf.heights[hf.index(ix, iz)],
+                        b = hf.heights[hf.index(ix + 1, iz)];
+            const float c = hf.heights[hf.index(ix, iz + 1)],
+                        d = hf.heights[hf.index(ix + 1, iz + 1)];
+            return (a + (b - a) * tx) * (1.0f - tz) +
+                   (c + (d - c) * tx) * tz;
+        },
+        // Walkable = the sampled world height is not under the water level.
+        "walkable_at_world",
+        [](pg::HeightField& hf, float x, float z) -> bool {
+            if (hf.nodes < 2 || hf.heights.empty())
+                return true;
+            const float gx = std::clamp(
+                (x + hf.half) / hf.cell, 0.0f,
+                static_cast<float>(hf.nodes - 1) - 1e-4f);
+            const float gz = std::clamp(
+                (z + hf.half) / hf.cell, 0.0f,
+                static_cast<float>(hf.nodes - 1) - 1e-4f);
+            const int ix = static_cast<int>(gx), iz = static_cast<int>(gz);
+            const float tx = gx - ix, tz = gz - iz;
+            const float a = hf.heights[hf.index(ix, iz)],
+                        b = hf.heights[hf.index(ix + 1, iz)];
+            const float c = hf.heights[hf.index(ix, iz + 1)],
+                        d = hf.heights[hf.index(ix + 1, iz + 1)];
+            const float h = (a + (b - a) * tx) * (1.0f - tz) +
+                            (c + (d - c) * tx) * tz;
+            return !(hf.hasWater && h < hf.waterLevel);
         });
 
     lua.new_usertype<pg::TileGrid>(

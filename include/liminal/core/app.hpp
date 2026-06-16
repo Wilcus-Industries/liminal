@@ -94,7 +94,7 @@ public:
     ScriptHost& scripts() { return *m_scripts; }
 
 private:
-    void renderScene(); // the built-in each<Transform, MeshRenderer> system
+    void renderScene(const glm::vec3& camPos); // the built-in each<Transform, MeshRenderer> system
     glm::mat4 primaryCameraView(); // also pushes Camera.fovDeg into settings
 
     std::unique_ptr<Window> m_window;

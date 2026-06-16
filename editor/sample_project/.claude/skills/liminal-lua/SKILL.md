@@ -63,6 +63,13 @@ saving re-reports if it still errors.
   (renderers are never auto-added; always nil-check).
 - `self:get_component("Name")` — generic accessor for any registered component
   by name; returns the component or nil.
+- `self:add_component("MeshRenderer", { mesh = "builtin:box" })` — add (or
+  replace) a component by name from a table of fields; returns the new component
+  handle (frame-local). The optional table is the same shape the component
+  serializes to. This is how a script gives a freshly-created entity a
+  `MeshRenderer` (or `Collider`, `Light`, …) — no scene pre-authoring needed.
+- `self:remove_component("Light")` — remove a component by name (no-op if absent).
+- `self:has_component("Collider")` → bool.
 
 **Frame-local pointer caveat (important):** components returned by
 `get_transform` / `get_mesh_renderer` / `get_component` are raw pointers into
@@ -84,18 +91,36 @@ Fetch via the accessors above. Field names:
     (`rotation.y` is yaw, `.x` is pitch, `.z` is roll). Spinning an object
     "around vertical" means changing `rotation.y`.
 - **MeshRenderer**: `.mesh` (asset string), `.texture` (asset string),
-  `.color` (`vec4`). Also `mr:set_color(r,g,b)` or `mr:set_color(r,g,b,a)`.
-  Mesh names: `builtin:box|pyramid|pillar|arch|stair|plane|quad`, seeded
-  primitives like `builtin:blob:42` / `builtin:tree:7` / `builtin:rock:3` /
-  `builtin:crystal:5`, or a `runtime:` key from `lm.assets.add_mesh`.
+  `.color` (`vec4`, gradient **bottom** tint), `.color2` (`vec4`, gradient
+  **top** tint — blended up the mesh's local height). Also `mr:set_color(r,g,b)`
+  / `mr:set_color(r,g,b,a)` (which **also** sets `color2` to the same value, so
+  the object is a flat tint unless you set a gradient) and
+  `mr:set_color2(r,g,b)` / `(r,g,b,a)` (the top color only — call after
+  `set_color` for a base→top gradient). Mesh names:
+  `builtin:box|pyramid|pillar|arch|stair|plane|quad`, seeded primitives like
+  `builtin:blob:42` / `builtin:tree:7` / `builtin:rock:3` / `builtin:crystal:5`,
+  the parametric `builtin:form:<sides>,<twist>,<taper>[,<seed>]` (an n-gon prism,
+  sides 3..8, e.g. `builtin:form:6,0.2,0.5`), or a `runtime:` key from
+  `lm.assets.add_mesh`.
 
 - **Camera**: `.fov`, `.near`, `.far` (numbers), `.primary` (bool), `.shader`
   (string — the shader pack name; see the Shaders section). Fetch via
   `self:get_component("Camera")` (nil if absent).
 
-`AudioSource`, `Light`, `Script` are registered components but expose no Lua
-usertype fields beyond `get_component` returning nil/an opaque handle — drive
-audio/AI through the `lm.*` namespaces below.
+- **Light**: `.color` (`vec3`), `.intensity` (number). Also
+  `light:set_color(r,g,b)`. Fetch via `self:get_component("Light")`.
+
+- **Collider**: `.center` (`vec3`), `.half_extents` (`vec3`) — an axis-aligned
+  box for `lm.physics`. Zero `half_extents` means "derive from the mesh bounds"
+  at query time.
+
+- **Billboard**: `.yaw_only` (bool). Presence makes the entity rotate to face
+  the active camera each frame — yaw-only when true, full-facing (also pitch)
+  when false.
+
+`AudioSource` and `Script` are registered components but expose no Lua usertype
+fields beyond `get_component` returning nil/an opaque handle — drive audio/AI
+through the `lm.*` namespaces below.
 
 ## Math types
 
@@ -103,13 +128,47 @@ audio/AI through the `lm.*` namespaces below.
   (scalar), unary `-`, `:length()`, `tostring`.
 - `vec4(x,y,z,w)` — fields `.x .y .z .w`.
 - Available as `lm.vec3` / `lm.vec4` as well as bare `vec3` / `vec4`.
-- Lua stdlib `math`, `string`, `table`, and a sandboxed `os` (time/clock/date
-  only — no `os.execute/exit/getenv/...`) are open. `io` is not available.
+- Lua stdlib `math`, `string`, `table`, the **full `os`** (including
+  `os.getenv/remove/rename/execute/exit/...`) and the **full `io`** library are
+  open — scripts have complete standard-library file access. **Caveat:** `io`
+  reads the real OS filesystem (via `resolve`/cwd), **not** the mounted pak, so
+  in a shipped game an `io.open` cannot read a file packed into the `.pak` —
+  read bundled text through the engine instead, or keep config inline. For
+  structured data prefer `lm.json` (below); to load another script's table use
+  `lm.import`.
 
 ## `lm` API reference
 
 ### lm.log(msg)
 Print to the engine console. `lm.log("text")`.
+
+### lm.json
+- `lm.json.encode(value)` → JSON string. Lua tables encode as a JSON array when
+  their keys are a contiguous `1..n` integer run, otherwise as an object.
+  Functions/userdata become `null`.
+- `lm.json.decode(string)` → Lua value (arrays as `1..n` tables). **Raises** a
+  Lua error on malformed JSON — wrap in `pcall` if the source is untrusted (e.g.
+  LLM output). Pairs naturally with `lm.ai` JSON specs.
+
+### lm.import(path)
+Project-relative module loader (the VFS-aware analogue of `require`): reads
+`path` through the asset system (pak first, then the search paths), runs the
+chunk **once** in the shared Lua state, and caches its return value. Every
+`lm.import("scripts/util.lua")` from any entity script returns the **same**
+cached table — this is the supported way to share code AND mutable state across
+scripts (entity scripts otherwise each get an isolated environment). The module
+file should `return` a table. Re-entrant imports of a file still loading get
+`nil` (cycle guard); a read/compile/runtime error is logged and returns `nil`
+(never throws).
+
+```lua
+-- scripts/shared.lua
+return { score = 0, add = function(self, n) self.score = self.score + n end }
+
+-- any entity script
+local shared = lm.import("scripts/shared.lua")
+shared:add(10)   -- visible to every other script that imported it
+```
 
 ### lm.scene
 - `lm.scene.find(name)` → first `Entity` with that `Name`, or nil.
@@ -140,6 +199,64 @@ Print to the engine console. `lm.log("text")`.
 - `lm.time.now()` → seconds since the host started (monotonic, double).
 - There is **no** `lm.time.dt` — use the `dt` argument to `on_update`.
 
+### lm.ui  (immediate-mode 2D / HUD)
+Screen-space drawing, re-issued every frame from `on_update` (immediate mode —
+nothing persists; stop drawing and it disappears). Drawn into the scene
+framebuffer, so it shows in the player, the editor viewport, and MCP
+screenshots. Coordinates are **render-target pixels, origin top-left** (x→right,
+y→down). Colors are 0..1 floats; alpha defaults to 1.
+- `lm.ui.size()` → `w, h` — the current render-target pixel size. Use it to
+  place/anchor HUD elements (for the `retro` pack this is the 400×300 virtual
+  size, not the window).
+- `lm.ui.rect(x, y, w, h, r, g, b [, a])` — filled rectangle. `lm.ui.quad` is an
+  alias.
+- `lm.ui.text(x, y, str, r, g, b [, a [, scale]])` — bitmap text (engine-baked
+  8×8 font; `scale` multiplies the 8px cell, default 1). `x,y` is the top-left of
+  the first glyph.
+- `lm.ui.line(x0, y0, x1, y1, r, g, b [, a [, thickness]])` — line segment
+  (default thickness 1).
+
+```lua
+function M.on_update(self, dt)
+    local w, h = lm.ui.size()
+    lm.ui.rect(0, 0, w, 18, 0, 0, 0, 0.5)          -- HUD bar
+    lm.ui.text(6, 5, "SCORE " .. score, 1, 1, 1)   -- white text
+    lm.ui.line(w/2 - 4, h/2, w/2 + 4, h/2, 1, 1, 1) -- crosshair
+end
+```
+
+### lm.render  (per-frame render uniforms)
+Drives the shared scene-shader knobs from Lua so a custom shader pack can react
+per area / to a decay clock. Persist until changed (set them each frame, or once
+when they change).
+- `lm.render.set_fog(r, g, b, density)` — fog color + density (feeds `uFogColor`
+  / `uFogDensity`).
+- `lm.render.set_decay(p)` — a 0..1 "unravel" progress (feeds `uDecayProgress`).
+- `lm.render.set_light(x, y, z)` — primary light direction (`uLightDir`).
+- `lm.render.set_shade(x, y, z)` — secondary/disagreeing light (`uShadeDir`).
+- `lm.render.set_uniform(name, number)` or `set_uniform(name, vec3)` — set an
+  arbitrary named uniform on the active scene shader. Unknown names (not declared
+  by the current pack) are silently ignored, so it is safe to set uniforms a pack
+  may or may not read.
+
+### lm.physics  (raycast / overlap)
+World queries against entity boxes — each entity's `Collider` (if present and
+non-degenerate) else its mesh's local bounds.
+- `lm.physics.raycast(origin, dir [, maxDist])` → `{ entity, point, normal,
+  distance }` or `nil`. `origin`/`dir` are `vec3` (`dir` is normalized for you);
+  `maxDist` 0 or omitted = unbounded. `entity` is the hit `Entity`, `point`/
+  `normal` are `vec3` in world space, `distance` is along `dir`.
+- `lm.physics.overlap(a, b)` → bool — do the world-space AABBs of entities `a`
+  and `b` intersect (false if either has no resolvable box).
+
+```lua
+-- eye ray pick
+local t = self:get_transform()
+local fwd = vec3(math.sin(t.rotation.y), 0, -math.cos(t.rotation.y))
+local hit = lm.physics.raycast(t.position, fwd, 20.0)
+if hit then lm.log("looking at " .. hit.entity.name) end
+```
+
 ### lm.audio
 The engine has one procedural DSP voice bank (not positional sources). The game
 thread only pokes atomics; these calls are safe.
@@ -157,8 +274,16 @@ thread only pokes atomics; these calls are safe.
 - `lm.assets.add_mesh(name, meshData)` → returns the resolvable storage key
   (a `runtime:` string) to put in `MeshRenderer.mesh`. `meshData` is a
   `MeshData` produced by procgen (e.g. `piece.mesh`, `lm.procgen.terrain_mesh`).
-  **Caveat:** runtime meshes do not survive a scene reload — re-register them in
-  `on_start` if you depend on them.
+- `lm.assets.add_texture(name, path)` → loads an image file (PNG/JPEG/TGA/BMP)
+  through the VFS and returns its `runtime:` key (put it in `MeshRenderer.texture`).
+- `lm.assets.add_texture(name, w, h, pixels)` → builds a `w×h` RGBA8 texture from
+  a flat Lua array `pixels` (length `w*h*4`, values 0..255, row-major, top-left
+  origin); returns the `runtime:` key. For procedural / pixel-art textures.
+- **Persistence:** runtime meshes/textures live for the asset cache's lifetime —
+  they **survive** scene reloads, play/stop, and `lm.scene.change` (the cache is
+  not rebuilt on those paths). They are lost only when the project is closed or
+  the process exits. Re-registering in `on_start` is safe (idempotent overwrite)
+  but not required for a key to resolve after a reload.
 
 ### lm.ai  (only when built with `LIMINAL_WITH_INFERENCE`)
 Local LLM inference. The table may be absent — feature-test with `if lm.ai then`.
@@ -191,7 +316,11 @@ Terrain:
 - `lm.procgen.terrain{ seed=, kind=, water=, n=, tile_size= }` → `HeightField`.
   `kind`: `plane|hills|canyon|islands|flooded|void`. `water`: `none|some|lots`.
   `HeightField`: `.nodes`, `.cell`, `.half`, `.has_water`, `.water_level`,
-  `:tile_height(x,z)`, `:tile_underwater(x,z)`.
+  `:tile_height(x,z)`, `:tile_underwater(x,z)` (these take **tile/node
+  indices**), and the **world-space** queries `:height_at_world(worldX, worldZ)`
+  → terrain height (bilinear) and `:walkable_at_world(worldX, worldZ)` → bool
+  (true when that point is not underwater). Use the world-space pair to place
+  objects / the player on the ground without deriving the tile transform.
 - `lm.procgen.terrain_mask(hf, params, tileset)` → opaque tile masks (params
   mirror the `terrain{}` fields).
 - `lm.procgen.terrain_mesh(hf)` / `lm.procgen.water_mesh(hf)` → `MeshData`
@@ -357,15 +486,13 @@ function M.on_start(self)
     local ground = lm.scene.create("ground")
     local key = lm.assets.add_mesh("town_terrain",
                                    lm.procgen.terrain_mesh(town.terrain))
-    local mr = ground:get_mesh_renderer()  -- may be nil on a bare entity
-    if mr then mr.mesh = key end
+    ground:add_component("MeshRenderer", { mesh = key })
 
     -- One entity per built piece.
     for i, piece in ipairs(town.pieces) do
         local e = lm.scene.create("piece_" .. i)
         local pkey = lm.assets.add_mesh("piece_" .. i, piece.mesh)
-        local pmr = e:get_mesh_renderer()
-        if pmr then pmr.mesh = pkey end
+        e:add_component("MeshRenderer", { mesh = pkey })
         local t = e:get_transform()
         t:set_position(piece.anchor.x, piece.anchor.y, piece.anchor.z)
     end
@@ -374,8 +501,8 @@ end
 return M
 ```
 
-> Note: a `lm.scene.create` entity has a `Name` and (after `get_transform`) a
-> `Transform`, but **no** `MeshRenderer` until one is added — if `get_mesh_renderer`
-> returns nil here you must add the component another way (e.g. author it in the
-> scene). Re-register `runtime:` meshes in `on_start` since they don't survive a
-> scene reload.
+> Note: a `lm.scene.create` entity has only a `Name` (and a `Transform` once you
+> call `get_transform`). Give it a renderer with
+> `e:add_component("MeshRenderer", { mesh = key })` — no scene pre-authoring or
+> entity pool needed. Runtime meshes/textures persist across scene reloads (see
+> `lm.assets`), so a one-time build in `on_start` is enough.
