@@ -284,6 +284,15 @@ thread only pokes atomics; these calls are safe.
   not rebuilt on those paths). They are lost only when the project is closed or
   the process exits. Re-registering in `on_start` is safe (idempotent overwrite)
   but not required for a key to resolve after a reload.
+- **No texture hot-reload:** a texture file is decoded **once** into a GPU
+  resource and cached for the asset cache's lifetime. Custom shaders hot-reload
+  ~0.5s after you save them; textures do **not**. Editing a texture file on disk
+  does **not** refresh what's already on screen — neither a scene reload,
+  play/stop, `lm.scene.change`, nor the `reload_scene` MCP tool rebuilds the
+  cache (they rebuild only the Scene + ScriptHost). To pick up a changed texture
+  file: re-call `lm.assets.add_texture(name, path)` with the **same** `name`
+  (overwrites the cache entry), use a fresh runtime name, or close + reopen the
+  project (the only path that destroys the cache).
 
 ### lm.ai  (only when built with `LIMINAL_WITH_INFERENCE`)
 Local LLM inference. The table may be absent — feature-test with `if lm.ai then`.
