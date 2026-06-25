@@ -490,6 +490,7 @@ void TerminalPanel::draw() {
 
     const bool focused =
         ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    m_focusedLastFrame = focused; // expose to EditorApp via focused()
 
     // Cell metrics from the current (monospace) font, to size the grid.
     ImFont* font = ImGui::GetFont();

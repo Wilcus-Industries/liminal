@@ -101,6 +101,7 @@ private:
     int m_rows = 0;
     bool m_started = false;            // session ever started
     bool m_exited = false;             // child observed gone
+    bool m_focusedLastFrame = false;   // panel held focus last draw() (see focused())
     std::string m_status;             // banner line (cmd launched / exit notice)
     std::string m_workingDir;          // child cwd (opened project dir); empty = wait
 
