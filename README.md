@@ -2,9 +2,6 @@
 
 A game engine for strange worlds.
 
-![freaky_cubes](assets/freaky_cubes.png)
-*freaky AI cubes*
-
 
 ## Features
 
