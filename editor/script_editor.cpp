@@ -270,9 +270,9 @@ void ScriptEditorPanel::dismissPopup() {
     m_popupPrefix.clear();
 }
 
-void ScriptEditorPanel::draw(float dt) {
+void ScriptEditorPanel::draw(float dt, const char* windowTitle, bool* pOpen) {
     if (m_wantFocus) ImGui::SetNextWindowFocus();
-    ImGui::Begin("Script Editor");
+    ImGui::Begin(windowTitle, pOpen);
     // ImGui only focuses windows on left-click; focus on right-click too.
     if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::IsWindowFocused()) ImGui::SetWindowFocus();
     m_wantFocus = false;

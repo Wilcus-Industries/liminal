@@ -488,8 +488,8 @@ void TerminalPanel::renderGrid(int cols, int rows, bool focused) {
 
 // --- draw --------------------------------------------------------------------
 
-void TerminalPanel::draw() {
-    ImGui::Begin("Terminal");
+void TerminalPanel::draw(const char* windowTitle, bool* pOpen) {
+    ImGui::Begin(windowTitle, pOpen);
     // ImGui only focuses windows on left-click; focus on right-click too.
     if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::IsWindowFocused()) ImGui::SetWindowFocus();
 

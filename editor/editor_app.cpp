@@ -181,13 +181,10 @@ EditorApp::EditorApp(std::string projectFile, bool startEmpty)
     // the font block so it's the last word on style at startup.
     applyTheme(m_themeName);
 
-    // Script editor pane logs through our console (decoupled via the sink).
-    m_scriptEditor = std::make_unique<ScriptEditorPanel>(
-        [this](const std::string& line) { log(line); });
-
-    // Terminal pane: hosts an interactive `claude` (or a shell fallback). The
-    // child process / reader thread spin up lazily on its first draw.
-    m_terminal = std::make_unique<TerminalPanel>();
+    // Seed the default one-of-each dock panel set (Hierarchy..ScriptEditor).
+    // Must exist before the first drawUi and before openProject below (so its
+    // terminal(s) pick up the working dir).
+    seedDefaultPanels();
 
     registerBuiltinComponents();
     m_gizmoOp = ImGuizmo::TRANSLATE;
@@ -653,6 +650,85 @@ void EditorApp::renderScene() {
         });
 }
 
+// --- panel registry ----------------------------------------------------------
+
+std::unique_ptr<TerminalPanel> EditorApp::makeTerminal() {
+    auto t = std::make_unique<TerminalPanel>();
+    // A terminal spawned while a project is open must start in the project dir.
+    if (!m_projectFile.empty())
+        t->setWorkingDir(fs::path(m_projectFile).parent_path().string());
+    return t;
+}
+
+std::unique_ptr<ScriptEditorPanel> EditorApp::makeScriptEditor() {
+    return std::make_unique<ScriptEditorPanel>(
+        [this](const std::string& line) { log(line); });
+}
+
+EditorApp::PanelInstance& EditorApp::addPanel(PanelKind kind) {
+    PanelInstance inst;
+    inst.kind = kind;
+    inst.uid = m_nextPanelUid++;
+    if (kind == PanelKind::Terminal)
+        inst.terminal = makeTerminal();
+    else if (kind == PanelKind::ScriptEditor)
+        inst.scriptEditor = makeScriptEditor();
+    m_panels.push_back(std::move(inst));
+    return m_panels.back();
+}
+
+void EditorApp::seedDefaultPanels() {
+    // Tear down any existing terminals first (stop pty + reader thread).
+    for (auto& p : m_panels)
+        if (p.kind == PanelKind::Terminal && p.terminal) p.terminal->stopSession();
+    m_panels.clear();
+    m_nextPanelUid = 1;
+    // Fixed startup uids 1..7 — buildDefaultLayout docks by the matching title.
+    addPanel(PanelKind::Hierarchy);    // ##1
+    addPanel(PanelKind::Inspector);    // ##2
+    addPanel(PanelKind::Viewport);     // ##3
+    addPanel(PanelKind::AssetBrowser); // ##4
+    addPanel(PanelKind::Console);      // ##5
+    addPanel(PanelKind::Terminal);     // ##6
+    addPanel(PanelKind::ScriptEditor); // ##7
+    m_activeViewportUid = 3;
+}
+
+bool EditorApp::anyScriptEditorDirty() const {
+    for (const auto& p : m_panels)
+        if (p.kind == PanelKind::ScriptEditor && p.scriptEditor &&
+            p.scriptEditor->anyDirty())
+            return true;
+    return false;
+}
+
+bool EditorApp::anyScriptEditorFocused() const {
+    for (const auto& p : m_panels)
+        if (p.kind == PanelKind::ScriptEditor && p.scriptEditor &&
+            p.scriptEditor->focused())
+            return true;
+    return false;
+}
+
+bool EditorApp::anyTerminalFocused() const {
+    for (const auto& p : m_panels)
+        if (p.kind == PanelKind::Terminal && p.terminal && p.terminal->focused())
+            return true;
+    return false;
+}
+
+ScriptEditorPanel* EditorApp::scriptEditorForOpen(int& uid) {
+    ScriptEditorPanel* first = nullptr;
+    int firstUid = 0;
+    for (auto& p : m_panels) {
+        if (p.kind != PanelKind::ScriptEditor || !p.scriptEditor) continue;
+        if (!first) { first = p.scriptEditor.get(); firstUid = p.uid; }
+        if (p.scriptEditor->focused()) { uid = p.uid; return p.scriptEditor.get(); }
+    }
+    uid = firstUid;
+    return first; // may be null -> caller defers a spawn
+}
+
 // --- dockspace / panels ------------------------------------------------------
 
 void EditorApp::drawUi() {
@@ -675,16 +751,55 @@ void EditorApp::drawUi() {
     if (ImGui::DockBuilderGetNode(dockId) == nullptr) buildDefaultLayout(dockId);
     ImGui::DockSpace(dockId);
 
-    drawMenuBar();
+    drawMenuBar(); // may append panels (Tools menu) — safe: before the loop
     ImGui::End();
 
-    drawHierarchy();
-    drawInspector();
-    drawViewport();
-    drawAssetBrowser();
-    drawConsole();
-    drawScriptEditor();
-    drawTerminal();
+    // Pick the active viewport (owns camera/pick/cursor-confine) for this frame.
+    // If the stored one was closed, fall back to the first Viewport instance.
+    {
+        bool activeExists = false;
+        int firstViewport = 0;
+        for (const auto& p : m_panels) {
+            if (p.kind != PanelKind::Viewport) continue;
+            if (!firstViewport) firstViewport = p.uid;
+            if (p.uid == m_activeViewportUid) activeExists = true;
+        }
+        if (!activeExists) m_activeViewportUid = firstViewport;
+    }
+
+    // Draw every panel. Index iteration (not range-for): a panel's draw may
+    // append to m_panels (Asset Browser defer-open is queued, Tools menu ran
+    // pre-loop, so in practice nothing appends here — but indices stay valid
+    // across an append regardless, whereas a reference/iterator would not).
+    for (std::size_t i = 0; i < m_panels.size(); ++i) {
+        PanelInstance& inst = m_panels[i];
+        switch (inst.kind) {
+            case PanelKind::Hierarchy:    drawHierarchy(inst); break;
+            case PanelKind::Inspector:    drawInspector(inst); break;
+            case PanelKind::Viewport:     drawViewport(inst); break;
+            case PanelKind::AssetBrowser: drawAssetBrowser(inst); break;
+            case PanelKind::Console:      drawConsole(inst); break;
+            case PanelKind::Terminal:     drawTerminal(inst); break;
+            case PanelKind::ScriptEditor: drawScriptEditor(inst); break;
+        }
+    }
+
+    // Erase windows closed via their X this frame. Terminals tear down their
+    // pty/reader thread first.
+    for (std::size_t i = 0; i < m_panels.size();) {
+        if (m_panels[i].open) { ++i; continue; }
+        if (m_panels[i].kind == PanelKind::Terminal && m_panels[i].terminal)
+            m_panels[i].terminal->stopSession();
+        m_panels.erase(m_panels.begin() + std::ptrdiff_t(i));
+    }
+
+    // Deferred Asset-Browser open with no ScriptEditor present: spawn one now
+    // (outside the loop, so the m_panels append can't dangle a draw reference).
+    if (!m_pendingOpenInNewScriptEditor.empty()) {
+        PanelInstance& se = addPanel(PanelKind::ScriptEditor);
+        se.scriptEditor->open(m_pendingOpenInNewScriptEditor);
+        m_pendingOpenInNewScriptEditor.clear();
+    }
 
     // Coalesce continuous widget edits (gizmo drag, inspector DragFloat3) into
     // single undo entries. Edit mode only — Play edits are transient. Runs after
@@ -696,12 +811,16 @@ void EditorApp::drawUi() {
     }
 }
 
-void EditorApp::drawScriptEditor() {
-    if (m_scriptEditor) m_scriptEditor->draw(m_dt);
+void EditorApp::drawScriptEditor(PanelInstance& inst) {
+    if (!inst.scriptEditor) return;
+    const std::string title = "Script Editor##" + std::to_string(inst.uid);
+    inst.scriptEditor->draw(m_dt, title.c_str(), &inst.open);
 }
 
-void EditorApp::drawTerminal() {
-    if (m_terminal) m_terminal->draw();
+void EditorApp::drawTerminal(PanelInstance& inst) {
+    if (!inst.terminal) return;
+    const std::string title = "Terminal##" + std::to_string(inst.uid);
+    inst.terminal->draw(title.c_str(), &inst.open);
 }
 
 void EditorApp::buildDefaultLayout(unsigned int dockspaceId) {
@@ -717,15 +836,17 @@ void EditorApp::buildDefaultLayout(unsigned int dockspaceId) {
     const ImGuiID bottom =
         ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.30f, nullptr, &center);
 
-    ImGui::DockBuilderDockWindow("Hierarchy", left);
-    ImGui::DockBuilderDockWindow("Inspector", right);
-    ImGui::DockBuilderDockWindow("Asset Browser", bottom);
-    ImGui::DockBuilderDockWindow("Console", bottom);
-    ImGui::DockBuilderDockWindow("Viewport", center);
+    // Dock by the default instances' title-with-uid strings (seedDefaultPanels
+    // hands out the fixed uids 1..7).
+    ImGui::DockBuilderDockWindow("Hierarchy##1", left);
+    ImGui::DockBuilderDockWindow("Inspector##2", right);
+    ImGui::DockBuilderDockWindow("Asset Browser##4", bottom);
+    ImGui::DockBuilderDockWindow("Console##5", bottom);
+    ImGui::DockBuilderDockWindow("Viewport##3", center);
     // Script Editor shares the center node, tabbed behind the Viewport.
-    ImGui::DockBuilderDockWindow("Script Editor", center);
+    ImGui::DockBuilderDockWindow("Script Editor##7", center);
     // Terminal shares the center node too, tabbed behind the Viewport.
-    ImGui::DockBuilderDockWindow("Terminal", center);
+    ImGui::DockBuilderDockWindow("Terminal##6", center);
     ImGui::DockBuilderFinish(dockId);
 }
 
@@ -769,7 +890,7 @@ void EditorApp::drawMenuBar() {
             // editor has no scene-dirty tracking, so that's the only check).
             if (ImGui::MenuItem("Close Project", nullptr, false,
                                 !m_projectFile.empty())) {
-                if (m_scriptEditor && m_scriptEditor->anyDirty())
+                if (anyScriptEditorDirty())
                     wantCloseConfirm = true;
                 else
                     wantCloseProject = true;
@@ -812,6 +933,18 @@ void EditorApp::drawMenuBar() {
                     applyTheme(t.name);
             ImGui::EndMenu();
         }
+        // Tools — spawn a new (closable) instance of any panel. Runs before the
+        // panel draw loop, so appending to m_panels here is safe.
+        if (ImGui::BeginMenu("Tools")) {
+            if (ImGui::MenuItem("New Hierarchy"))     addPanel(PanelKind::Hierarchy);
+            if (ImGui::MenuItem("New Inspector"))     addPanel(PanelKind::Inspector);
+            if (ImGui::MenuItem("New Viewport"))      addPanel(PanelKind::Viewport);
+            if (ImGui::MenuItem("New Asset Browser")) addPanel(PanelKind::AssetBrowser);
+            if (ImGui::MenuItem("New Console"))       addPanel(PanelKind::Console);
+            if (ImGui::MenuItem("New Terminal"))      addPanel(PanelKind::Terminal);
+            if (ImGui::MenuItem("New Script Editor")) addPanel(PanelKind::ScriptEditor);
+            ImGui::EndMenu();
+        }
         ImGui::TextDisabled("| %s%s",
                             m_scenePath.empty() ? "(unsaved scene)"
                                                 : m_scenePath.c_str(),
@@ -826,7 +959,7 @@ void EditorApp::drawMenuBar() {
     {
         ImGuiIO& io = ImGui::GetIO();
         const bool mod = io.KeySuper || io.KeyCtrl;
-        const bool scriptFocused = m_scriptEditor && m_scriptEditor->focused();
+        const bool scriptFocused = anyScriptEditorFocused();
         if (mod && ImGui::IsKeyPressed(ImGuiKey_S, false) && !scriptFocused &&
             !io.WantTextInput) {
             if (m_scenePath.empty())
@@ -838,7 +971,7 @@ void EditorApp::drawMenuBar() {
         // Undo/redo (Edit mode scene edits). The Script Editor and Terminal own
         // their own undo while focused (TextEditor's UndoBuffer; the shell), so
         // skip the global chord for them. Cmd+Y or Cmd+Shift+Z = redo.
-        const bool terminalFocused = m_terminal && m_terminal->focused();
+        const bool terminalFocused = anyTerminalFocused();
         if (m_mode == Mode::Edit && !scriptFocused && !terminalFocused &&
             !io.WantTextInput && mod) {
             const bool shift = io.KeyShift;
@@ -950,8 +1083,9 @@ void EditorApp::drawMenuBar() {
     }
 }
 
-void EditorApp::drawHierarchy() {
-    ImGui::Begin("Hierarchy");
+void EditorApp::drawHierarchy(PanelInstance& inst) {
+    const std::string title = "Hierarchy##" + std::to_string(inst.uid);
+    ImGui::Begin(title.c_str(), &inst.open);
     focusOnRightClick();
 
     if (ImGui::Button("+ Empty")) {
@@ -1002,8 +1136,9 @@ void EditorApp::drawHierarchy() {
     ImGui::End();
 }
 
-void EditorApp::drawInspector() {
-    ImGui::Begin("Inspector");
+void EditorApp::drawInspector(PanelInstance& inst) {
+    const std::string title = "Inspector##" + std::to_string(inst.uid);
+    ImGui::Begin(title.c_str(), &inst.open);
     focusOnRightClick();
     entt::registry& reg = m_scene.registry();
     if (m_selected == entt::null || !reg.valid(m_selected)) {
@@ -1047,9 +1182,19 @@ void EditorApp::drawInspector() {
     ImGui::End();
 }
 
-void EditorApp::drawViewport() {
-    ImGui::Begin("Viewport");
+void EditorApp::drawViewport(PanelInstance& inst) {
+    const std::string title = "Viewport##" + std::to_string(inst.uid);
+    ImGui::Begin(title.c_str(), &inst.open);
     focusOnRightClick();
+
+    // Only ONE viewport drives camera/pick/cursor-confine. isActive is decided
+    // from m_activeViewportUid (resolved at the top of drawUi). Focusing a
+    // viewport claims ownership for the NEXT frame — computed AFTER isActive so
+    // grabbing focus never double-handles input the same frame. All viewports
+    // share the single renderer FBO, so non-active ones are passive mirrors.
+    const bool isActive = (inst.uid == m_activeViewportUid);
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+        m_activeViewportUid = inst.uid;
 
     // Toolbar: play controls + undo/redo + gizmo mode.
     if (m_mode == Mode::Edit) {
@@ -1087,10 +1232,11 @@ void EditorApp::drawViewport() {
         ImGui::End();
         return;
     }
-    // Record the Viewport window rect for confineCursorToViewport (Play mode).
+    // Record the Viewport window rect for confineCursorToViewport (Play mode) —
+    // only for the active viewport (the one input is bound to this frame).
     // Whole window, not just the image, so the Play/Pause/Stop toolbar stays
     // clickable while other docked panels are walled off.
-    {
+    if (isActive) {
         const ImVec2 wpos = ImGui::GetWindowPos();
         const ImVec2 wsize = ImGui::GetWindowSize();
         m_viewportMinX = wpos.x;
@@ -1108,14 +1254,17 @@ void EditorApp::drawViewport() {
     // FBO texture is bottom-up; flip V.
     ImGui::Image(ImTextureID(uintptr_t(m_renderer.colorTexture())), size,
                  ImVec2(0, 1), ImVec2(1, 0));
-    const bool hovered = ImGui::IsItemHovered();
-    const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const bool hovered = isActive && ImGui::IsItemHovered();
+    const bool clicked = isActive && ImGui::IsItemClicked(ImGuiMouseButton_Left);
 
-    handleCameraInput(hovered);
+    // Camera fly, gizmo, picking — only the active viewport. Non-active windows
+    // are passive mirrors of the shared FBO (an accepted limitation: all
+    // viewports show the same camera view).
+    if (isActive) handleCameraInput(hovered);
 
     // Scroll-to-adjust camera-speed indicator. Editor-only (lives in the
     // editor viewport draw); fades over its last 0.4s. Set in handleCameraInput.
-    if (m_camSpeedHud > 0.0f) {
+    if (isActive && m_camSpeedHud > 0.0f) {
         m_camSpeedHud -= m_dt;
         const float alpha = std::clamp(m_camSpeedHud / 0.4f, 0.0f, 1.0f);
         char buf[48];
@@ -1131,21 +1280,24 @@ void EditorApp::drawViewport() {
         dl->AddText(tp, ImGui::GetColorU32(ImVec4(1, 1, 1, alpha)), buf);
     }
 
-    // Gizmo mode hotkeys — never while flying or typing.
-    ImGuiIO& io = ImGui::GetIO();
-    if (hovered && !io.WantTextInput && !m_window.cursorCaptured()) {
-        if (ImGui::IsKeyPressed(ImGuiKey_W)) m_gizmoOp = ImGuizmo::TRANSLATE;
-        if (ImGui::IsKeyPressed(ImGuiKey_E)) m_gizmoOp = ImGuizmo::ROTATE;
-        if (ImGui::IsKeyPressed(ImGuiKey_R)) m_gizmoOp = ImGuizmo::SCALE;
-    }
+    if (isActive) {
+        // Gizmo mode hotkeys — never while flying or typing.
+        ImGuiIO& io = ImGui::GetIO();
+        if (hovered && !io.WantTextInput && !m_window.cursorCaptured()) {
+            if (ImGui::IsKeyPressed(ImGuiKey_W)) m_gizmoOp = ImGuizmo::TRANSLATE;
+            if (ImGui::IsKeyPressed(ImGuiKey_E)) m_gizmoOp = ImGuizmo::ROTATE;
+            if (ImGui::IsKeyPressed(ImGuiKey_R)) m_gizmoOp = ImGuizmo::SCALE;
+        }
 
-    const bool gizmoDrawn =
-        drawGizmo(glm::vec2(imgMin.x, imgMin.y), glm::vec2(size.x, size.y));
+        const bool gizmoDrawn =
+            drawGizmo(glm::vec2(imgMin.x, imgMin.y), glm::vec2(size.x, size.y));
 
-    if (clicked && (!gizmoDrawn || (!ImGuizmo::IsOver() && !ImGuizmo::IsUsing()))) {
-        const ImVec2 mouse = ImGui::GetMousePos();
-        pickEntity(glm::vec2((mouse.x - imgMin.x) / size.x,
-                             (mouse.y - imgMin.y) / size.y));
+        if (clicked &&
+            (!gizmoDrawn || (!ImGuizmo::IsOver() && !ImGuizmo::IsUsing()))) {
+            const ImVec2 mouse = ImGui::GetMousePos();
+            pickEntity(glm::vec2((mouse.x - imgMin.x) / size.x,
+                                 (mouse.y - imgMin.y) / size.y));
+        }
     }
 
     ImGui::End();
@@ -1294,8 +1446,9 @@ void EditorApp::pickEntity(const glm::vec2& uv) {
     m_selected = best; // miss = deselect
 }
 
-void EditorApp::drawAssetBrowser() {
-    ImGui::Begin("Asset Browser");
+void EditorApp::drawAssetBrowser(PanelInstance& inst) {
+    const std::string winTitle = "Asset Browser##" + std::to_string(inst.uid);
+    ImGui::Begin(winTitle.c_str(), &inst.open);
     focusOnRightClick();
 
     if (ImGui::Button("Refresh")) refreshAssetTree();
@@ -1326,10 +1479,20 @@ void EditorApp::drawAssetBrowser() {
                 m_browserStatus = e.path;
             } else {
                 // Any other file: try to edit it. open() sniffs content and
-                // refuses binaries with an unknown extension.
-                if (dbl && m_scriptEditor) {
-                    m_scriptEditor->open(e.path); // opens + focuses the pane
-                    ImGui::SetWindowFocus("Script Editor");
+                // refuses binaries with an unknown extension. Route to the
+                // focused Script Editor (else the first); if none exist, defer a
+                // spawn to after the panel loop (spawning here would reallocate
+                // m_panels mid-iteration).
+                if (dbl) {
+                    int seUid = 0;
+                    if (ScriptEditorPanel* se = scriptEditorForOpen(seUid)) {
+                        se->open(e.path); // opens + focuses the pane
+                        const std::string seTitle =
+                            "Script Editor##" + std::to_string(seUid);
+                        ImGui::SetWindowFocus(seTitle.c_str());
+                    } else {
+                        m_pendingOpenInNewScriptEditor = e.path;
+                    }
                 } else {
                     m_browserStatus = "file: " + e.path +
                                       " (double-click to edit)";
@@ -1365,8 +1528,9 @@ void EditorApp::drawAssetBrowser() {
     ImGui::End();
 }
 
-void EditorApp::drawConsole() {
-    ImGui::Begin("Console");
+void EditorApp::drawConsole(PanelInstance& inst) {
+    const std::string title = "Console##" + std::to_string(inst.uid);
+    ImGui::Begin(title.c_str(), &inst.open);
     focusOnRightClick();
     if (ImGui::Button("Clear")) m_console.clear();
     ImGui::Separator();
@@ -1421,10 +1585,13 @@ void EditorApp::openProject(const std::string& projectFile) {
 
     if (!m_startupScene.empty()) openScene(m_startupScene);
 
-    // Point the editor terminal at the project dir so `claude` (or the fallback
-    // shell) starts with the opened project as its CWD. No-op once spawned.
-    if (m_terminal)
-        m_terminal->setWorkingDir(p.parent_path().string());
+    // Point every editor terminal at the project dir so `claude` (or the
+    // fallback shell) starts with the opened project as its CWD. No-op once a
+    // given terminal has spawned. Terminals spawned later inherit it via
+    // makeTerminal().
+    for (auto& pnl : m_panels)
+        if (pnl.kind == PanelKind::Terminal && pnl.terminal)
+            pnl.terminal->setWorkingDir(p.parent_path().string());
 
     // Seed the liminal-lua Claude Code skill into this project if absent, so
     // Claude Code in the editor terminal knows the `lm` API. Non-fatal.
@@ -1448,16 +1615,14 @@ void EditorApp::openProject(const std::string& projectFile) {
 void EditorApp::closeProject() {
     if (m_mode == Mode::Play) stopPlay();
 
-    // Drop the MCP server (dtor stops + joins its thread) and the terminal
-    // session, then recreate a fresh terminal so a future open re-spawns clean.
+    // Drop the MCP server (dtor stops + joins its thread).
     m_mcp.reset();
-    if (m_terminal) m_terminal->stopSession();
-    m_terminal = std::make_unique<TerminalPanel>();
 
-    // Recreate the script editor from scratch — drops every open tab (their
-    // dirtiness was already confirmed away by the caller).
-    m_scriptEditor = std::make_unique<ScriptEditorPanel>(
-        [this](const std::string& line) { log(line); });
+    // Tear down ALL panel instances and re-seed the default one-of-each set
+    // (terminals get their pty/reader thread stopped first inside
+    // seedDefaultPanels). Drops every script-editor tab (dirtiness was already
+    // confirmed away by the caller) and resets uids to the fixed defaults.
+    seedDefaultPanels();
 
     // Clear scene + selection.
     m_scene = Scene();
