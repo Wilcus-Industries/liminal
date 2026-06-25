@@ -39,14 +39,19 @@ inline ImU32 packRGB(uint8_t r, uint8_t g, uint8_t b) {
 // it as an ImU32. defaultIsBg picks the terminal default fg/bg when the cell
 // carries a "default" color.
 ImU32 colorToImU32(VTermScreen* screen, VTermColor col, bool isBg) {
+    // Terminal default fg/bg follow the active ImGui theme so the panel matches
+    // the editor look. ImGui::GetColorU32 returns an IM_COL32-packed ImU32 — the
+    // SAME memory layout (0xAABBGGRR) packRGB / AddRectFilled / AddText use, so no
+    // channel swap is needed; we can return it directly.
     if (VTERM_COLOR_IS_DEFAULT_FG(&col) || VTERM_COLOR_IS_DEFAULT_BG(&col)) {
-        // Defaults: dark background, light foreground — a classic terminal look.
-        return isBg ? packRGB(18, 18, 22) : packRGB(220, 220, 220);
+        return isBg ? ImGui::GetColorU32(ImGuiCol_WindowBg)
+                    : ImGui::GetColorU32(ImGuiCol_Text);
     }
     vterm_screen_convert_color_to_rgb(screen, &col);
     if (VTERM_COLOR_IS_RGB(&col))
         return packRGB(col.rgb.red, col.rgb.green, col.rgb.blue);
-    return isBg ? packRGB(18, 18, 22) : packRGB(220, 220, 220);
+    return isBg ? ImGui::GetColorU32(ImGuiCol_WindowBg)
+                : ImGui::GetColorU32(ImGuiCol_Text);
 }
 
 } // namespace

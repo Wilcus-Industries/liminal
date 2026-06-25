@@ -8,6 +8,9 @@
 #include <imgui.h>
 #include <imgui_internal.h> // DockBuilder API
 #include <ImGuizmo.h>
+#ifdef LIMINAL_NOTO_EMOJI_TTF
+#include <imgui_freetype.h> // ImGuiFreeTypeBuilderFlags_LoadColor
+#endif
 
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -143,6 +146,29 @@ EditorApp::EditorApp(std::string projectFile, bool startEmpty)
         if (fs::exists(LIMINAL_EDITOR_FONT_TTF) &&
             io.Fonts->AddFontFromFileTTF(LIMINAL_EDITOR_FONT_TTF, 16.0f * scale)) {
             io.FontGlobalScale = 1.0f / scale;
+#ifdef LIMINAL_NOTO_EMOJI_TTF
+            // Merge Noto Color Emoji over the body face so the terminal panel
+            // (and any UI text) can show color emoji + symbol glyphs JetBrains
+            // Mono lacks. Requires the FreeType atlas builder
+            // (IMGUI_ENABLE_FREETYPE) + LoadColor for the CBDT color bitmaps.
+            // Best-effort: skip + log if the font wasn't fetched.
+            if (fs::exists(LIMINAL_NOTO_EMOJI_TTF)) {
+                // Wide range covers symbols + emoji planes; ImWchar is 32-bit
+                // here (IMGUI_USE_WCHAR32), so plane-1 codepoints fit. In 1.92's
+                // dynamic font system ranges are advisory, but we keep an
+                // explicit one for clarity. FontLoaderFlags is the 1.92 rename of
+                // the old FontBuilderFlags.
+                static const ImWchar kEmojiRanges[] = {0x1, 0x1FFFF, 0};
+                ImFontConfig cfg;
+                cfg.MergeMode = true;
+                cfg.OversampleH = cfg.OversampleV = 1;
+                cfg.FontLoaderFlags |= ImGuiFreeTypeBuilderFlags_LoadColor;
+                io.Fonts->AddFontFromFileTTF(LIMINAL_NOTO_EMOJI_TTF, 16.0f * scale,
+                                             &cfg, kEmojiRanges);
+            } else {
+                log("[editor] Noto Color Emoji not found, emoji glyphs disabled");
+            }
+#endif
             m_titleFont =
                 io.Fonts->AddFontFromFileTTF(LIMINAL_EDITOR_FONT_TTF, 34.0f * scale);
         } else {

@@ -29,7 +29,7 @@ No install/export rules — liminal is no longer a `find_package` consumable; th
 
 First-party translation units compile with `-Wall -Wextra` (the `LIMINAL_WARNING_FLAGS` var, applied target-wide to the lib/player/tests and source-scoped to the editor's own `.cpp` files so the in-tree vendored sources — ImGui, ImGuizmo, ImGuiColorTextEdit, libvterm, stb, miniaudio, glad — stay unwarned). The build also adds `-Wl,-no_warn_duplicate_libraries` when `CheckLinkerFlag` confirms support (silences the harmless duplicate-`libglfw3.a` warning from newer macOS ld).
 
-Dependencies fetched via `cmake/Dependencies.cmake` (FetchContent): GLFW, glad, glm, entt, Dear ImGui, miniaudio, stb, nlohmann/json, sol2+Lua, llama.cpp, ImGuizmo, ImGuiColorTextEdit (BalazsJako, editor-only, compiled into the editor like ImGuizmo), libvterm (neovim mirror, editor-only; plain C core `src/*.c` + `include/vterm.h`, no usable CMake so the `.c` files compile straight into liminal-editor like ImGuizmo — include both `include/` and `src/`; pinned commit `934bc2fbf21800ac3458a499df8820ca5fb45fd3`), cpp-httplib (yhirose, editor-only, header-only; INTERFACE target `httplib::httplib` carries the include dir + Threads dep — backs the editor's MCP server; plaintext localhost only, OpenSSL/zlib/brotli forced off; pinned `v0.18.3`), JetBrains Mono (editor-only; plain TTF zip, path exported as `LIMINAL_JETBRAINS_MONO_TTF`).
+Dependencies fetched via `cmake/Dependencies.cmake` (FetchContent): GLFW, glad, glm, entt, Dear ImGui, miniaudio, stb, nlohmann/json, sol2+Lua, llama.cpp, ImGuizmo, ImGuiColorTextEdit (BalazsJako, editor-only, compiled into the editor like ImGuizmo), libvterm (neovim mirror, editor-only; plain C core `src/*.c` + `include/vterm.h`, no usable CMake so the `.c` files compile straight into liminal-editor like ImGuizmo — include both `include/` and `src/`; pinned commit `934bc2fbf21800ac3458a499df8820ca5fb45fd3`), cpp-httplib (yhirose, editor-only, header-only; INTERFACE target `httplib::httplib` carries the include dir + Threads dep — backs the editor's MCP server; plaintext localhost only, OpenSSL/zlib/brotli forced off; pinned `v0.18.3`), JetBrains Mono (editor-only; plain TTF zip, path exported as `LIMINAL_JETBRAINS_MONO_TTF`), FreeType (editor-only; pinned `VER-2-13-3`, all optional deps disabled via `FT_DISABLE_HARFBUZZ/PNG/ZLIB/BZIP2/BROTLI` so it builds standalone — backs ImGui's `misc/freetype/imgui_freetype.cpp` color-bitmap atlas builder), Noto Color Emoji (editor-only; single CBDT/CBLC color-bitmap TTF fetched via `DOWNLOAD_NO_EXTRACT` from googlefonts/noto-emoji `v2.047`, path exported as `LIMINAL_NOTO_EMOJI_TTF`). When `LIMINAL_BUILD_EDITOR` is on, the root CMake compiles `imgui_freetype.cpp` INTO `liminal_imgui` (not just the editor exe — ImGui 1.92's core font system references the FreeType loader from imgui.cpp/imgui_draw.cpp when `IMGUI_ENABLE_FREETYPE` is set) and defines `IMGUI_ENABLE_FREETYPE` + `IMGUI_USE_WCHAR32` PUBLIC on `liminal_imgui` (WCHAR32 widens `ImWchar` to 32-bit so plane-1 emoji codepoints survive ImGui's UTF-8 decode; it changes struct layout so it must be consistent across lib/editor/player/tests). FreeType links PUBLIC into `liminal_imgui`.
 
 ## Structure
 
@@ -304,6 +304,15 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              the game (cleared when not Play-captured);
              UI font = JetBrains Mono (baked LIMINAL_EDITOR_FONT_TTF, 16px × content
              scale + inverse FontGlobalScale for retina, fs::exists fallback to default);
+             Noto Color Emoji (baked LIMINAL_NOTO_EMOJI_TTF) is MERGE-mode merged over
+             the body face at the same size with ImFontConfig.FontLoaderFlags |=
+             ImGuiFreeTypeBuilderFlags_LoadColor (the 1.92 rename of FontBuilderFlags)
+             so color emoji + symbol glyphs render (used by the Terminal panel); the
+             FreeType atlas builder (IMGUI_ENABLE_FREETYPE, compiled into liminal_imgui)
+             is mandatory for color glyphs, and IMGUI_USE_WCHAR32 is required so plane-1
+             emoji codepoints aren't collapsed to U+FFFD. The merge is guarded by
+             fs::exists(LIMINAL_NOTO_EMOJI_TTF) — a missing emoji TTF logs + skips, the
+             editor still runs (#include <imgui_freetype.h> for the LoadColor flag);
              script_editor (ScriptEditorPanel: tabbed text editor on ImGuiColorTextEdit
              for any text file — binary sniff via leading-NUL check + 2 MB cap,
              language highlighting by extension, plain text otherwise; dirty tabs +
@@ -338,8 +347,14 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              reader thread drains the pty into a mutex-guarded byte queue, main-thread
              draw() feeds it to vterm_input_write and the VTerm is touched
              single-threaded by construction. Renders the cell grid via ImDrawList
-             — per-cell bg rect + UTF-8 glyph, indexed/default colors resolved with
-             vterm_screen_convert_color_to_rgb, 256-color + box-drawing + alt-screen +
+             — per-cell bg rect + UTF-8 glyph, indexed colors resolved with
+             vterm_screen_convert_color_to_rgb; the terminal-DEFAULT fg/bg
+             (VTERM_COLOR_IS_DEFAULT_FG/BG) now derive from the live ImGui theme via
+             ImGui::GetColorU32(ImGuiCol_Text)/(ImGuiCol_WindowBg) in colorToImU32 so
+             the panel follows applyTheme (those return IM_COL32-packed ImU32 — same
+             0xAABBGGRR layout as packRGB, no channel swap; older scrollback is
+             captured-at-the-time and won't re-tint on a theme switch). 256-color +
+             box-drawing + color emoji (via the FreeType/Noto merge above) + alt-screen +
              cursor (solid block when the panel is focused — glyph re-drawn in the bg
              color over it — hollow outline when not); mouse-wheel scrollback via
              sb_pushline/sb_popline ring.
@@ -485,7 +500,7 @@ All bugs and notable risks from the 2026-06-12 review were fixed on 2026-06-12 (
 2026-06-15: fixed an editor SIGSEGV (UAF) when a Lua script stored entities from `lm.scene.each` / `lm.scene.find_all` and used them after the callback (the "collect-then-destroy" pattern, e.g. a `clear_world()` mass-destroy). Both binders passed/stored the C++ `Entity` **lvalue**, so sol2 handed Lua a *reference* to a reused stack local; after the call the slot held garbage, and `entity:destroy()` dereferenced a non-null garbage `Scene*` in `Entity::valid()`. Fix: push Lua-OWNED copies — `each` calls `fn(Entity(h, sc))` (rvalue), `find_all` stores `sol::make_object(sv, e)` (`src/script/lua_bindings.cpp`). Invariant: when handing a C++ value-handle (`Entity`) to Lua, always pass an rvalue or `make_object` so Lua owns the copy; never the lvalue (which binds by reference). Covered by `tests/test_lua_api.cpp` `testMassDestroy` (build N entities → `each`-collect → `:destroy()` → rebuild; asserts none survive). Note the *separate*, still-current hazard below: raw component pointers from `get_*`/`get_component` stay frame-local. Remaining accepted limitations:
 
 - macOS shipped games are an exe + `.pak` sidecar pair (codesigning rejects a Mach-O with data appended after the load commands); Windows/Linux append the pak into a single exe.
-- The editor Terminal panel is POSIX-only (macOS/Linux via forkpty). On Windows `liminal::Pty` is a stub (ConPTY not yet implemented): `spawn()` returns false and the panel shows an "unsupported on this platform" banner. Color emoji is out of scope (256-color + box-drawing only; no freetype/color-glyph wiring). The panel has no type/font-mismatch protection beyond requiring a monospace UI font (JetBrains Mono provides this) — cell metrics use `CalcTextSizeA("M")` × `GetFontSize()`.
+- The editor Terminal panel is POSIX-only (macOS/Linux via forkpty). On Windows `liminal::Pty` is a stub (ConPTY not yet implemented): `spawn()` returns false and the panel shows an "unsupported on this platform" banner. Color emoji is now supported (ImGui's FreeType atlas builder + Noto Color Emoji merged over JetBrains Mono with the LoadColor flag, IMGUI_USE_WCHAR32 for plane-1 codepoints; gracefully skipped if the emoji TTF isn't present). The panel has no type/font-mismatch protection beyond requiring a monospace UI font (JetBrains Mono provides this) — cell metrics use `CalcTextSizeA("M")` × `GetFontSize()`.
 - `runtime:` meshes/textures registered via `lm.assets.add_mesh`/`add_texture` DO survive a scene reload, play/stop, and `lm.scene.change`: the `AssetCache` is a value member of `App`/`EditorApp` that is never reconstructed on those paths (only the `Scene` + `ScriptHost` are rebuilt), so the keys persist for the cache's lifetime. They are lost only when the cache itself is destroyed (editor Close Project, or process exit). Scripts may still re-register idempotently in `on_start` (a re-add overwrites), but it isn't required for the key to resolve after a reload. Corollary (now documented in the liminal-lua `SKILL.md` for the editor `claude` agent): textures get NO hot-reload — a texture file is decoded once into a GPU resource and cached for the cache's lifetime (only shaders are mtime-watched, via `tickShaderWatch`); editing a texture file on disk does not refresh the screen, and none of scene reload / play-stop / `lm.scene.change` / the `reload_scene` MCP tool rebuild the cache. Re-pick it up by re-calling `lm.assets.add_texture(name, path)` with the same name, using a fresh name, or closing + reopening the project.
 - Scripts using `lm.ai` must call `forget(id)` after a request completes, or responses accumulate.
 - `lm.scene.change` is unsupported during editor Play (the scene swap is deferred only in the player).

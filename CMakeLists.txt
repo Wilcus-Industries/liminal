@@ -96,6 +96,28 @@ target_include_directories(liminal_imgui PUBLIC
 target_link_libraries(liminal_imgui PUBLIC glfw)
 add_library(liminal::imgui ALIAS liminal_imgui)
 
+# ImGui 1.92's font system calls into the FreeType atlas loader from its CORE
+# translation units (imgui.cpp / imgui_draw.cpp) whenever IMGUI_ENABLE_FREETYPE
+# is defined — so the freetype builder must live in THIS library, not just the
+# editor executable, or the player/tests linking liminal_imgui hit undefined
+# ImGuiFreeType symbols. Gate on LIMINAL_BUILD_EDITOR since freetype is fetched
+# in that branch of cmake/Dependencies.cmake; the editor merges Noto Color Emoji
+# with the LoadColor flag. The vendored imgui_freetype.cpp stays out of the
+# -Wall/-Wextra scope (liminal_imgui carries no warning flags). The define +
+# freetype link are PUBLIC so every consumer (editor/player/tests) is consistent.
+if(LIMINAL_BUILD_EDITOR)
+    target_sources(liminal_imgui PRIVATE
+        ${imgui_SOURCE_DIR}/misc/freetype/imgui_freetype.cpp)
+    # IMGUI_USE_WCHAR32 widens ImWchar to 32 bits so codepoints in Unicode
+    # plane 1 (emoji live at U+1F300+) survive ImGui's UTF-8 decode instead of
+    # collapsing to U+FFFD — required for the color-emoji glyphs to render. It
+    # changes ImFontGlyph/ImWchar layout, so it MUST be PUBLIC + consistent
+    # across every consumer of liminal_imgui (lib/editor/player/tests).
+    target_compile_definitions(liminal_imgui PUBLIC
+        IMGUI_ENABLE_FREETYPE IMGUI_USE_WCHAR32)
+    target_link_libraries(liminal_imgui PUBLIC freetype)
+endif()
+
 # ---------------------------------------------------------------------------
 # Built-in shader packs (retro + native), embedded as string literals at
 # configure time so the Renderer's default ctor never touches the filesystem.
