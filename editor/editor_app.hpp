@@ -32,6 +32,7 @@
 #include "terminal_panel.hpp"
 #include "mcp_server.hpp"
 #include "recent_projects.hpp"
+#include "edit_history.hpp"
 
 struct ImFont;
 
@@ -118,6 +119,15 @@ private:
     void startPlay();
     void stopPlay();
 
+    // --- undo/redo (Edit mode scene edits) ---
+    // Apply an undo/redo step: remember the current selection's Name, restore
+    // the snapshot, then re-resolve selection by Name (entt-ids reset on load).
+    // No-op + log when the stack is empty or while in Play.
+    void doUndo();
+    void doRedo();
+    // Set m_selected to the first entity whose Name matches, else entt::null.
+    void selectByName(const std::string& name);
+
     void log(const std::string& line);
     void refreshAssetTree();
 
@@ -187,6 +197,9 @@ private:
     // --- selection / gizmo ---
     entt::entity m_selected = entt::null;
     int m_gizmoOp = 0; // ImGuizmo::OPERATION; int to keep the header light
+
+    // --- undo/redo (Edit mode scene edits; whole-scene JSON snapshots) ---
+    EditHistory m_history;
 
     // --- editor camera ---
     glm::vec3 m_camPos{6.0f, 4.5f, 9.0f};

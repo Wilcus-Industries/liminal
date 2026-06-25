@@ -19,6 +19,7 @@ add_executable(liminal-editor
     main.cpp
     editor_app.cpp
     recent_projects.cpp
+    edit_history.cpp
     theme.cpp
     script_editor.cpp
     lua_complete.cpp
