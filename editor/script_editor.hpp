@@ -34,7 +34,11 @@ public:
     void open(const std::string& path);
 
     // Draw the dock window. Call once per frame from EditorApp::drawUi.
-    void draw(float dt);
+    // windowTitle lets the editor give each instance a unique ImGui window id
+    // ("Script Editor##<uid>"); the visible label is the part before "##". pOpen,
+    // when non-null, drives the window's close (X) button -> *pOpen=false.
+    void draw(float dt, const char* windowTitle = "Script Editor",
+              bool* pOpen = nullptr);
 
     // True while the Script Editor window (or a child of it) had focus on the
     // last draw — EditorApp uses this to route the global Cmd/Ctrl+S.

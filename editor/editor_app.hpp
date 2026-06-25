@@ -77,16 +77,58 @@ private:
     // future settings window call only this; unknown names are a no-op + log.
     void applyTheme(const std::string& name);
 
-    // --- panels ---
+    // --- panels (closable + multi-instance via a PanelInstance registry) ---
+    // Every dock panel is one entry in m_panels. Hierarchy/Inspector/Console/
+    // AssetBrowser mirror SHARED editor state (selection, console, asset tree);
+    // Terminal/ScriptEditor own their own state through the per-instance
+    // unique_ptr. Window titles carry a "##<uid>" suffix so duplicates get
+    // distinct ImGui ids while showing the same visible label.
+    enum class PanelKind {
+        Hierarchy,
+        Inspector,
+        Viewport,
+        AssetBrowser,
+        Console,
+        Terminal,
+        ScriptEditor
+    };
+    struct PanelInstance {
+        PanelKind kind;
+        int uid = 0;     // stable; forms the ImGui "##<uid>" suffix in the title
+        bool open = true; // false after the window X is clicked -> erased
+        std::unique_ptr<TerminalPanel> terminal;         // Terminal kind only
+        std::unique_ptr<ScriptEditorPanel> scriptEditor; // ScriptEditor kind only
+    };
+
     void drawMenuBar();
-    void drawHierarchy();
-    void drawInspector();
-    void drawViewport();
-    void drawAssetBrowser();
-    void drawConsole();
-    void drawScriptEditor();
-    void drawTerminal();
+    void drawHierarchy(PanelInstance& inst);
+    void drawInspector(PanelInstance& inst);
+    void drawViewport(PanelInstance& inst);
+    void drawAssetBrowser(PanelInstance& inst);
+    void drawConsole(PanelInstance& inst);
+    void drawScriptEditor(PanelInstance& inst);
+    void drawTerminal(PanelInstance& inst);
     void buildDefaultLayout(unsigned int dockspaceId);
+
+    // Seed the default one-of-each panel set at fixed startup uids (Hierarchy=1
+    // .. ScriptEditor=7) so buildDefaultLayout's title strings dock them. Resets
+    // m_panels + m_nextPanelUid; used by the ctor and closeProject.
+    void seedDefaultPanels();
+    // Append a panel of `kind` at the next uid, constructing its sub-panel
+    // (terminal/script editor) wired identically to the defaults. Returns the
+    // new instance. NEVER call while iterating m_panels (it may reallocate) —
+    // the Tools menu (pre-loop) and the deferred-open path are the safe sites.
+    PanelInstance& addPanel(PanelKind kind);
+    // Factories that wire a fresh sub-panel exactly like the default set.
+    std::unique_ptr<TerminalPanel> makeTerminal();
+    std::unique_ptr<ScriptEditorPanel> makeScriptEditor();
+    // Cross-instance predicates replacing the old single-panel singletons.
+    bool anyScriptEditorDirty() const;
+    bool anyScriptEditorFocused() const;
+    bool anyTerminalFocused() const;
+    // The ScriptEditor a "open this file" action targets: the focused one, else
+    // the first; nullptr (and *uid=0) when none exist (caller may defer-spawn).
+    ScriptEditorPanel* scriptEditorForOpen(int& uid);
 
     // --- viewport helpers ---
     void handleCameraInput(bool viewportHovered);
@@ -176,11 +218,16 @@ private:
     std::unique_ptr<Audio> m_audio;
     Scene m_scene;
 
-    // --- script editor pane (own TextEditor tabs; logs via our console) ---
-    std::unique_ptr<ScriptEditorPanel> m_scriptEditor;
-
-    // --- terminal pane (hosts `claude` / a shell over a pty + libvterm) ---
-    std::unique_ptr<TerminalPanel> m_terminal;
+    // --- dock panels (closable + multi-instance) -----------------------------
+    // One entry per open panel window. Terminal/ScriptEditor instances own their
+    // own pty/shell + TextEditor tabs; the rest mirror shared editor state.
+    std::vector<PanelInstance> m_panels;
+    int m_nextPanelUid = 1;       // next "##<uid>" suffix to hand out
+    int m_activeViewportUid = 0;  // the Viewport instance that owns camera/pick
+    // A file double-clicked in the Asset Browser when NO ScriptEditor exists:
+    // open it in a freshly spawned ScriptEditor AFTER the panel loop (spawning
+    // mid-loop would reallocate m_panels). Empty = nothing pending.
+    std::string m_pendingOpenInNewScriptEditor;
 
     // --- MCP server (read-only scene introspection for Claude Code) ---
     // Started on first project open; pump()ed each frame on the main thread so

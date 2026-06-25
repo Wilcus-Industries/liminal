@@ -234,6 +234,47 @@ src/
   ui/        ImGuiLayer lifecycle wrapper (chains GLFW callbacks with Window's)
 editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              colorTexture().
+             Panels are CLOSABLE + MULTI-INSTANCE via a PanelInstance registry
+             (m_panels): each open dock window is one {PanelKind kind, int uid,
+             bool open, unique_ptr<TerminalPanel>, unique_ptr<ScriptEditorPanel>}
+             — window titles carry a "##<uid>" suffix so duplicates get distinct
+             ImGui ids while showing the same visible label (the part before
+             "##"); Begin's p_open = &inst.open, so the window X closes just that
+             instance (drawUi erases open==false entries after the draw loop;
+             Terminal kind calls stopSession() first). seedDefaultPanels() seeds
+             one-of-each at FIXED uids (Hierarchy=1, Inspector=2, Viewport=3,
+             AssetBrowser=4, Console=5, Terminal=6, ScriptEditor=7) so
+             buildDefaultLayout docks by the "Title##uid" strings; addPanel(kind)
+             appends at the next uid (Terminal/ScriptEditor construct their
+             sub-panel via makeTerminal/makeScriptEditor, wired identically to the
+             defaults). A new "Tools" main-menu (after Theme) spawns a fresh
+             instance of any panel (New Hierarchy / Inspector / Viewport / Asset
+             Browser / Console / Terminal / ScriptEditor) — it runs in drawMenuBar
+             BEFORE the panel draw loop, so the addPanel append is iteration-safe
+             (the Asset-Browser "open file when no ScriptEditor exists" path
+             instead DEFERS its spawn to after the loop via
+             m_pendingOpenInNewScriptEditor, since spawning mid-loop would
+             reallocate m_panels). SHARED vs per-instance: m_selected / m_console
+             / m_assetTree stay shared, so duplicate Hierarchy/Inspector/Console/
+             Asset-Browser windows mirror the same underlying data; Terminal +
+             ScriptEditor own their state per-instance (two Terminals = two
+             independent shells). Singleton-replacing helpers: anyScriptEditorDirty
+             (Close-Project guard), anyScriptEditorFocused / anyTerminalFocused
+             (undo-chord suppression OR'd across instances), scriptEditorForOpen
+             (focused else first ScriptEditor for the Asset-Browser open route).
+             VIEWPORT INPUT: only ONE viewport drives camera/pick/cursor-confine —
+             m_activeViewportUid (resolved at the top of drawUi; falls back to the
+             first Viewport if its owner was closed). drawViewport runs
+             handleCameraInput/gizmo/pickEntity + records the confine rect only
+             when inst.uid == m_activeViewportUid; focusing a viewport claims
+             ownership for the NEXT frame (set AFTER the isActive read, so grabbing
+             focus never double-handles input the same frame). All viewports share
+             the single renderer/FBO, so non-active ones are passive mirrors of the
+             same camera view (accepted limitation). ScriptEditorPanel::draw /
+             TerminalPanel::draw take a (windowTitle, p_open) so each instance
+             Begins its own "##<uid>" window. closeProject tears down ALL instances
+             and re-seeds the default set (seedDefaultPanels, terminals stopped
+             first), resetting uids.
              Landing screen (Screen::Landing, the default when launched with no
              project): a JetBrains-style chooser drawn full-window before any
              project opens — drawLanding() runs instead of the dockspace + scene
@@ -257,14 +298,15 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              straight into the editor, --empty = blank editor scene, --sample =
              the bundled sample project.
              File > Close Project (closeProject, enabled only with a project
-             open) tears the project down — resets m_mcp/terminal/script-editor
-             (recreated fresh), scene/selection, project + shader-catalog/
-             m_shaderWatch state — and returns to the landing chooser. Gated
-             behind a "Discard unsaved changes?" confirm modal when any script-
-             editor tab is dirty (ScriptEditorPanel::anyDirty(); the editor has
-             NO scene-dirty tracking, so that's the only check); clean closes
-             skip the modal. TerminalPanel::stopSession() is public to support
-             this teardown.
+             open) tears the project down — resets m_mcp, re-seeds the default
+             panel set (seedDefaultPanels: all instances dropped, terminals
+             stopped first, fresh one-of-each), scene/selection, project +
+             shader-catalog/m_shaderWatch state — and returns to the landing
+             chooser. Gated behind a "Discard unsaved changes?" confirm modal when
+             ANY script-editor instance is dirty (anyScriptEditorDirty() over
+             ScriptEditorPanel::anyDirty(); the editor has NO scene-dirty
+             tracking, so that's the only check); clean closes skip the modal.
+             TerminalPanel::stopSession() is public to support this teardown.
              play-in-editor = JSON snapshot before Play, fresh
              ScriptHost, restore snapshot on Stop (entity IDs reset, selection cleared).
              undo/redo (edit_history.{hpp,cpp}: EditHistory — whole-scene JSON
@@ -329,7 +371,8 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              by name. EditorApp::applyTheme(name) is the single switch seam (looks
              up + applies to ImGui::GetStyle(), sets m_themeName, unknown = log+no-op);
              called in the ctor after the font block to override ImGuiLayer's base
-             StyleColorsDark. The "Theme" main-menu (after Game) just iterates the
+             StyleColorsDark. The "Theme" main-menu (Game → Theme → Tools order)
+             just iterates the
              registry → applyTheme — zero menu-specific logic, so a future settings
              window reuses the same seam. m_themeName is in-memory, defaults Liminal
              each launch (persistence deferred to a settings window)),
@@ -490,6 +533,7 @@ All bugs and notable risks from the 2026-06-12 review were fixed on 2026-06-12 (
 - Scripts using `lm.ai` must call `forget(id)` after a request completes, or responses accumulate.
 - `lm.scene.change` is unsupported during editor Play (the scene swap is deferred only in the player).
 - Editor undo/redo restores whole-scene JSON snapshots (entt-ids reset, same as the Play restore); selection is re-resolved by `Name` after each step, so an undone/redone entity with no unique Name may lose selection. Undo/redo is Edit-mode only and capped at ~100 steps. The Script Editor (TextEditor's own UndoBuffer) and Terminal (shell) keep their own undo while focused; the global scene chord is suppressed for them.
+- Editor panels are multi-instance (Tools menu → New <panel>): duplicate Hierarchy/Inspector/Console/Asset-Browser windows all mirror the SAME shared state (m_selected / m_console / m_assetTree) — they are views, not independent documents. Multiple Viewports all share the single renderer/FBO, so they show the SAME camera view; only one (m_activeViewportUid, the last-focused) drives camera fly / gizmo / picking / cursor-confine each frame, the rest are passive mirrors. Closing all instances of a kind is allowed; closeProject re-seeds the default one-of-each. Two ScriptEditor instances showing their internal "Discard changes?" modals are keyed per-window-id so they don't collide, but visually overlap.
 - Custom shaders: a frag-only file (`shaders/<name>.frag`) is a fragment BODY ONLY — the engine prepends `#version 410 core`, the varyings (vNormal, vViewDist, vGradT, smooth vUV) and the per-draw uniforms (uTex, uColor, uColor2, uLightDir, uAlphaTest) + supplies the native vertex stage; the file must contain just `void main(){ ... FragColor = ...; }` (no #version / in / out / uniform decls). Full packs (`shaders/<name>/scene.vert`+`scene.frag`) own both stages: attribute locations 0=pos 1=normal 2=uv, may read any per-draw uniform (uModel/uView/uProj/uNormalMat/uColor/uColor2/uGradBase/uGradInv/uTex/uLightDir + retro-only ones; unused are harmless). Discovered/custom shaders always render at Native (window) resolution.
 - `lm.ui` is single-material flat 2D (engine-baked 8x8 bitmap font, no kerning/Unicode beyond printable ASCII); in the retro pack it lands in the 400x300 virtual FBO and upscales with the scene. Per-vertex MeshRenderer color is a top/bottom gradient (color2) only — per-submesh material slots are out of scope (G14): a mesh draws with one color/texture pair.
 - Script editor completion popup position mirrors private upstream layout math (gutter = " maxline " + 10px mLeftMargin, line advance = bare font height, child scroll queried by recomposing BeginChild's window name via imgui_internal) — re-verify if the ImGuiColorTextEdit or ImGui pin changes. No type inference: `:` on any identifier offers Entity methods. Script-editor tab bar is intentionally not Reorderable (tab IDs are positional). Enter auto-indent is forced on for all language definitions via a mutated copy of the def in `ScriptEditorPanel::open` (upstream Lua def ships with `mAutoIndentation=false`, which disables leading-whitespace copy on newline).

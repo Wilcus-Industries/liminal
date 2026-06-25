@@ -46,7 +46,10 @@ public:
     // Draw the dock window. Call once per frame from EditorApp::drawUi. Spawns
     // the child lazily on the first draw that has a known cell grid AND a
     // working directory set (so `claude` starts in the opened project).
-    void draw();
+    // windowTitle lets the editor give each instance a unique ImGui window id
+    // ("Terminal##<uid>"); the visible label is the part before "##". pOpen, when
+    // non-null, drives the window's close (X) button -> *pOpen=false.
+    void draw(const char* windowTitle = "Terminal", bool* pOpen = nullptr);
 
     // Set the directory the child process is spawned in (the opened project's
     // dir). Must be called before the session spawns; once the child is running
