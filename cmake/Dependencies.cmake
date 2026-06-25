@@ -178,9 +178,22 @@ if(LIMINAL_BUILD_EDITOR)
     # scene through). Plaintext localhost only: we never enable
     # CPPHTTPLIB_OPENSSL_SUPPORT. Its CMake defines an INTERFACE target
     # `httplib::httplib` carrying the include dir + Threads dependency.
+    #
+    # REQUIRE_* alone is not enough: cpp-httplib also has USE_*_IF_AVAILABLE
+    # knobs (default ON) that opportunistically detect OpenSSL/zlib/brotli and,
+    # when found, enable the feature AND add that library's include dir to the
+    # interface target. On a machine where those happen to resolve to a DIFFERENT
+    # SDK than the active toolchain (e.g. CommandLineTools headers under an Xcode
+    # libc++), the injected `-I .../usr/include` lands ahead of libc++'s own C
+    # header shims and breaks <cmath>/<cstring> ("didn't find libc++'s <math.h>").
+    # Force the opportunistic knobs off too so the MCP server stays plaintext and
+    # pulls in zero external include dirs.
     set(HTTPLIB_REQUIRE_OPENSSL OFF CACHE BOOL "" FORCE)
     set(HTTPLIB_REQUIRE_ZLIB    OFF CACHE BOOL "" FORCE)
     set(HTTPLIB_REQUIRE_BROTLI  OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_ZLIB_IF_AVAILABLE    OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_BROTLI_IF_AVAILABLE  OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(httplib
         GIT_REPOSITORY https://github.com/yhirose/cpp-httplib
         GIT_TAG        v0.18.3

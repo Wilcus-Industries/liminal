@@ -60,6 +60,11 @@ public:
     // down before recreating a fresh panel.
     void stopSession();
 
+    // Whether the Terminal window held focus last frame. EditorApp uses this to
+    // suppress global editor shortcuts (e.g. Cmd+Z) while the terminal is active
+    // so keys reach the shell instead.
+    bool focused() const { return m_focusedLastFrame; }
+
 private:
     // One scrolled-off line, captured from libvterm's sb_pushline callback.
     struct ScrollLine {

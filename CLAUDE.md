@@ -175,6 +175,26 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              this teardown.
              play-in-editor = JSON snapshot before Play, fresh
              ScriptHost, restore snapshot on Stop (entity IDs reset, selection cleared).
+             undo/redo (edit_history.{hpp,cpp}: EditHistory — whole-scene JSON
+             snapshot stacks reusing sceneToJson/sceneFromJson, bounded ~100
+             deep. Edit mode ONLY. Two entry points: pushSnapshot(scene) called
+             BEFORE discrete mutations (hierarchy create/duplicate/delete,
+             inspector add/remove component, all four MCP mutation tools), and
+             tick(scene, ImGui::IsAnyItemActive()||ImGuizmo::IsUsing()) once at
+             the end of drawUi() to coalesce a whole gizmo/DragFloat3 drag into a
+             single undo entry (commits the pre-drag "clean" baseline on the
+             interaction's release edge if the scene changed). EditorApp::doUndo/
+             doRedo remember the selected entity's Name, restore, then
+             selectByName() to re-resolve selection (entt-ids don't survive the
+             load). Cleared on scene/project open, newScene, closeProject, and
+             Play start/stop. Wired to: Edit menu (Undo Cmd+Z / Redo Cmd+Y),
+             viewport-toolbar Undo/Redo buttons (BeginDisabled on empty stacks),
+             and the global chord next to Cmd+S — Cmd/Ctrl+Z undo, Cmd/Ctrl+Y or
+             Cmd/Ctrl+Shift+Z redo, suppressed while the Script Editor or Terminal
+             is focused (TerminalPanel::focused() added) so those panels keep
+             their own undo: the ImGuiColorTextEdit widget already has a full
+             native undo/redo (Cmd+Z/Cmd+Y on macOS via io.ConfigMacOSXBehaviors)
+             and the terminal's Ctrl+Z goes to the shell — neither is reimplemented).
              Camera input: handleCameraInput (RMB-fly: drag-look + WASD/QE; scroll =
              speed whenever the viewport is HOVERED or while flying — read before the
              not-flying early-return so a plain scroll over the viewport tweaks speed
@@ -369,6 +389,7 @@ All bugs and notable risks from the 2026-06-12 review were fixed on 2026-06-12 (
 - `runtime:` meshes registered via `lm.assets.add_mesh` don't survive a scene reload unless the script re-registers them.
 - Scripts using `lm.ai` must call `forget(id)` after a request completes, or responses accumulate.
 - `lm.scene.change` is unsupported during editor Play (the scene swap is deferred only in the player).
+- Editor undo/redo restores whole-scene JSON snapshots (entt-ids reset, same as the Play restore); selection is re-resolved by `Name` after each step, so an undone/redone entity with no unique Name may lose selection. Undo/redo is Edit-mode only and capped at ~100 steps. The Script Editor (TextEditor's own UndoBuffer) and Terminal (shell) keep their own undo while focused; the global scene chord is suppressed for them.
 - Custom shaders: a frag-only file (`shaders/<name>.frag`) is a fragment BODY ONLY — the engine prepends `#version 410 core`, the varyings (vNormal, vViewDist, vGradT, smooth vUV) and the per-draw uniforms (uTex, uColor, uColor2, uLightDir, uAlphaTest) + supplies the native vertex stage; the file must contain just `void main(){ ... FragColor = ...; }` (no #version / in / out / uniform decls). Full packs (`shaders/<name>/scene.vert`+`scene.frag`) own both stages: attribute locations 0=pos 1=normal 2=uv, may read any per-draw uniform (uModel/uView/uProj/uNormalMat/uColor/uColor2/uGradBase/uGradInv/uTex/uLightDir + retro-only ones; unused are harmless). Discovered/custom shaders always render at Native (window) resolution.
 - Editor gizmo euler composition (ImGuizmo XYZ vs Transform Y→X→Z) approximates compound rotations — documented in `drawGizmo`.
 - Script editor completion popup position mirrors private upstream layout math (gutter = " maxline " + 10px mLeftMargin, line advance = bare font height, child scroll queried by recomposing BeginChild's window name via imgui_internal) — re-verify if the ImGuiColorTextEdit or ImGui pin changes. No type inference: `:` on any identifier offers Entity methods. Script-editor tab bar is intentionally not Reorderable (tab IDs are positional). Enter auto-indent is forced on for all language definitions via a mutated copy of the def in `ScriptEditorPanel::open` (upstream Lua def ships with `mAutoIndentation=false`, which disables leading-whitespace copy on newline).

@@ -640,6 +640,15 @@ void EditorApp::drawUi() {
     drawConsole();
     drawScriptEditor();
     drawTerminal();
+
+    // Coalesce continuous widget edits (gizmo drag, inspector DragFloat3) into
+    // single undo entries. Edit mode only — Play edits are transient. Runs after
+    // every panel drew, so the scene reflects this frame's interaction.
+    if (m_mode == Mode::Edit) {
+        const bool interacting =
+            ImGui::IsAnyItemActive() || ImGuizmo::IsUsing();
+        m_history.tick(m_scene, interacting);
+    }
 }
 
 void EditorApp::drawScriptEditor() {
@@ -724,6 +733,16 @@ void EditorApp::drawMenuBar() {
             if (ImGui::MenuItem("Quit")) m_window.requestClose();
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Edit")) {
+            const bool editMode = m_mode == Mode::Edit;
+            if (ImGui::MenuItem("Undo", "Cmd+Z", false,
+                                editMode && m_history.canUndo()))
+                doUndo();
+            if (ImGui::MenuItem("Redo", "Cmd+Y", false,
+                                editMode && m_history.canRedo()))
+                doRedo();
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Game")) {
             if (ImGui::MenuItem("Play", nullptr, false, m_mode == Mode::Edit))
                 startPlay();
@@ -769,6 +788,20 @@ void EditorApp::drawMenuBar() {
                 wantSaveAs = true;
             else
                 saveScene(m_scenePath);
+        }
+
+        // Undo/redo (Edit mode scene edits). The Script Editor and Terminal own
+        // their own undo while focused (TextEditor's UndoBuffer; the shell), so
+        // skip the global chord for them. Cmd+Y or Cmd+Shift+Z = redo.
+        const bool terminalFocused = m_terminal && m_terminal->focused();
+        if (m_mode == Mode::Edit && !scriptFocused && !terminalFocused &&
+            !io.WantTextInput && mod) {
+            const bool shift = io.KeyShift;
+            if (!shift && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+                doUndo();
+            else if (ImGui::IsKeyPressed(ImGuiKey_Y, false) ||
+                     (shift && ImGui::IsKeyPressed(ImGuiKey_Z, false)))
+                doRedo();
         }
     }
 
@@ -877,12 +910,14 @@ void EditorApp::drawHierarchy() {
     focusOnRightClick();
 
     if (ImGui::Button("+ Empty")) {
+        m_history.pushSnapshot(m_scene);
         Entity e = m_scene.create("entity");
         e.add<Transform>({});
         m_selected = e.handle();
     }
     ImGui::SameLine();
     if (ImGui::Button("+ Box")) {
+        m_history.pushSnapshot(m_scene);
         Entity e = m_scene.create("box");
         e.add<Transform>({});
         e.add<MeshRenderer>({});
@@ -893,11 +928,13 @@ void EditorApp::drawHierarchy() {
     const bool hasSel = m_selected != entt::null && reg.valid(m_selected);
     ImGui::BeginDisabled(!hasSel);
     if (ImGui::Button("Duplicate")) {
+        m_history.pushSnapshot(m_scene);
         Entity dup = duplicateEntity(m_selected);
         m_selected = dup.handle();
     }
     ImGui::SameLine();
     if (ImGui::Button("Delete")) {
+        m_history.pushSnapshot(m_scene);
         m_scene.destroy(Entity(m_selected, &m_scene));
         m_selected = entt::null;
     }
@@ -942,7 +979,10 @@ void EditorApp::drawInspector() {
             else
                 ImGui::TextDisabled("(no inspector)");
         }
-        if (!keep) ops.removeFrom(reg, m_selected); // header close button = remove
+        if (!keep) { // header close button = remove
+            m_history.pushSnapshot(m_scene);
+            ops.removeFrom(reg, m_selected);
+        }
         ImGui::PopID();
     }
 
@@ -953,6 +993,7 @@ void EditorApp::drawInspector() {
             if (ImGui::Selectable(ops.name.c_str())) {
                 // Empty object -> every field takes its default (built-in
                 // fromJson uses json::value with defaults throughout).
+                m_history.pushSnapshot(m_scene);
                 ops.fromJson(reg, m_selected, nlohmann::json::object());
             }
         }
@@ -965,9 +1006,17 @@ void EditorApp::drawViewport() {
     ImGui::Begin("Viewport");
     focusOnRightClick();
 
-    // Toolbar: play controls + gizmo mode.
+    // Toolbar: play controls + undo/redo + gizmo mode.
     if (m_mode == Mode::Edit) {
         if (ImGui::Button("Play")) startPlay();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!m_history.canUndo());
+        if (ImGui::Button("Undo")) doUndo();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!m_history.canRedo());
+        if (ImGui::Button("Redo")) doRedo();
+        ImGui::EndDisabled();
     } else {
         if (ImGui::Button(m_paused ? "Resume" : "Pause")) m_paused = !m_paused;
         ImGui::SameLine();
@@ -1392,6 +1441,7 @@ void EditorApp::closeProject() {
     m_scene = Scene();
     m_scenePath.clear();
     m_selected = entt::null;
+    m_history.clear();
 
     // Clear project state.
     m_projectFile.clear();
@@ -1417,6 +1467,7 @@ void EditorApp::newScene() {
     m_scene = Scene();
     m_scenePath.clear();
     m_selected = entt::null;
+    m_history.clear();
     log("[editor] new scene");
 }
 
@@ -1431,6 +1482,7 @@ void EditorApp::openScene(const std::string& path) {
     }
     m_scenePath = resolved;
     m_selected = entt::null;
+    m_history.clear();
     log("[editor] scene open: " + resolved + " (" +
         std::to_string(m_scene.entityCount()) + " entities)");
 }
@@ -1590,6 +1642,7 @@ Entity EditorApp::duplicateEntity(entt::entity src) {
 void EditorApp::startPlay() {
     if (m_mode == Mode::Play) return;
     m_playSnapshot = sceneToJson(m_scene);
+    m_history.clear(); // Play edits are transient; don't pollute edit-mode undo
     m_mode = Mode::Play;
     m_paused = false;
     // Editor-owned audio: created on first Play, re-enabled on subsequent ones
@@ -1640,7 +1693,43 @@ void EditorApp::stopPlay() {
     m_mode = Mode::Edit;
     m_paused = false;
     m_selected = entt::null; // entity ids changed on restore
+    m_history.clear();       // fresh baseline after the snapshot restore
     log("[editor] stop — scene restored from snapshot");
+}
+
+void EditorApp::selectByName(const std::string& name) {
+    m_selected = entt::null;
+    if (name.empty()) return;
+    entt::registry& reg = m_scene.registry();
+    for (auto e : reg.view<entt::entity>()) {
+        if (const auto* n = reg.try_get<Name>(e); n && n->value == name) {
+            m_selected = e;
+            return;
+        }
+    }
+}
+
+void EditorApp::doUndo() {
+    if (m_mode != Mode::Edit) return;
+    // Remember the selection by Name — entt-ids are reset by sceneFromJson.
+    std::string selName;
+    if (entt::registry& reg = m_scene.registry();
+        m_selected != entt::null && reg.valid(m_selected))
+        if (const auto* n = reg.try_get<Name>(m_selected)) selName = n->value;
+    if (!m_history.undo(m_scene)) return;
+    selectByName(selName);
+    log("[editor] undo");
+}
+
+void EditorApp::doRedo() {
+    if (m_mode != Mode::Edit) return;
+    std::string selName;
+    if (entt::registry& reg = m_scene.registry();
+        m_selected != entt::null && reg.valid(m_selected))
+        if (const auto* n = reg.try_get<Name>(m_selected)) selName = n->value;
+    if (!m_history.redo(m_scene)) return;
+    selectByName(selName);
+    log("[editor] redo");
 }
 
 void EditorApp::log(const std::string& line) {
@@ -1728,6 +1817,7 @@ void EditorApp::startMcpServer() {
         if (e == entt::null) return {{"error", "entity not found"}};
         const ComponentOps* ops = ComponentRegistry::instance().find(comp);
         if (!ops) return {{"error", "unknown component: " + comp}};
+        m_history.pushSnapshot(m_scene); // Claude-driven edit, still undoable
         ops->fromJson(m_scene.registry(), e, data);
         return {{"ok", true},
                 {"id", (int)entt::to_integral(e)},
@@ -1741,6 +1831,7 @@ void EditorApp::startMcpServer() {
         if (e == entt::null) return {{"error", "entity not found"}};
         const ComponentOps* ops = ComponentRegistry::instance().find(comp);
         if (!ops) return {{"error", "unknown component: " + comp}};
+        m_history.pushSnapshot(m_scene);
         ops->removeFrom(m_scene.registry(), e);
         return {{"ok", true},
                 {"id", (int)entt::to_integral(e)},
@@ -1749,6 +1840,7 @@ void EditorApp::startMcpServer() {
 
     provider.createEntity = [this](const std::string& name) -> nlohmann::json {
         registerBuiltinComponents();
+        m_history.pushSnapshot(m_scene);
         Entity ent = m_scene.create(name);
         return {{"ok", true},
                 {"id", (int)entt::to_integral(ent.handle())},
@@ -1761,6 +1853,7 @@ void EditorApp::startMcpServer() {
         if (e == entt::null) return {{"error", "entity not found"}};
         if (e == m_selected) m_selected = entt::null;
         const int id = (int)entt::to_integral(e);
+        m_history.pushSnapshot(m_scene);
         m_scene.destroy(Entity(e, &m_scene));
         return {{"ok", true}, {"id", id}};
     };
