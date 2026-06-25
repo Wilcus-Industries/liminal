@@ -114,3 +114,25 @@ if(LIMINAL_NOTO_EMOJI_TTF)
     target_compile_definitions(liminal-editor PRIVATE
         LIMINAL_NOTO_EMOJI_TTF="${LIMINAL_NOTO_EMOJI_TTF}")
 endif()
+
+# macOS packaging: assemble a relocatable Liminal.app (+ .dmg) from the built
+# editor/player binaries and the bundled resources, via cmake/pack_macos.cmake.
+# The in-tree targets stay plain executables (so dev `./liminal-editor` and the
+# Build-Game player lookup are undisturbed); packaging is an explicit, opt-in
+# `cmake --build build --target package-mac`.
+if(APPLE AND LIMINAL_BUILD_PLAYER)
+    add_custom_target(package-mac
+        COMMAND ${CMAKE_COMMAND}
+            -DEDITOR_EXE=$<TARGET_FILE:liminal-editor>
+            -DPLAYER_EXE=$<TARGET_FILE:liminal-player>
+            -DFONT_TTF=${LIMINAL_JETBRAINS_MONO_TTF}
+            -DEMOJI_TTF=${LIMINAL_NOTO_EMOJI_TTF}
+            -DSKILL_MD=${LIMINAL_EDITOR_LUA_SKILL}
+            -DSAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/sample_project
+            -DOUT_DIR=${CMAKE_BINARY_DIR}/dist
+            -DVERSION=${PROJECT_VERSION}
+            -P ${CMAKE_SOURCE_DIR}/cmake/pack_macos.cmake
+        DEPENDS liminal-editor liminal-player
+        VERBATIM
+        COMMENT "Packaging Liminal.app + .dmg into build/dist")
+endif()

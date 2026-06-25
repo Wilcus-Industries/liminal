@@ -25,6 +25,8 @@
 #include <liminal/scene/serialize.hpp>
 #include <liminal/version.hpp>
 
+#include "resource_paths.hpp"
+
 #include <nlohmann/json.hpp>
 #if defined(LIMINAL_WITH_INFERENCE)
 #include <liminal/inference/engine.hpp>
@@ -143,8 +145,12 @@ EditorApp::EditorApp(std::string projectFile, bool startEmpty)
         float sx = 1.0f, sy = 1.0f;
         glfwGetWindowContentScale(m_window.handle(), &sx, &sy);
         const float scale = sx > 0.0f ? sx : 1.0f;
-        if (fs::exists(LIMINAL_EDITOR_FONT_TTF) &&
-            io.Fonts->AddFontFromFileTTF(LIMINAL_EDITOR_FONT_TTF, 16.0f * scale)) {
+        // Prefer a bundled copy (packaged .app / portable dir), fall back to the
+        // configure-time baked path for in-tree dev builds.
+        const std::string fontPath = liminal::editor::resolveResource(
+            "JetBrainsMono.ttf", LIMINAL_EDITOR_FONT_TTF);
+        if (fs::exists(fontPath) &&
+            io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 16.0f * scale)) {
             io.FontGlobalScale = 1.0f / scale;
 #ifdef LIMINAL_NOTO_EMOJI_TTF
             // Merge Noto Color Emoji over the body face so the terminal panel
@@ -152,7 +158,9 @@ EditorApp::EditorApp(std::string projectFile, bool startEmpty)
             // Mono lacks. Requires the FreeType atlas builder
             // (IMGUI_ENABLE_FREETYPE) + LoadColor for the CBDT color bitmaps.
             // Best-effort: skip + log if the font wasn't fetched.
-            if (fs::exists(LIMINAL_NOTO_EMOJI_TTF)) {
+            const std::string emojiPath = liminal::editor::resolveResource(
+                "NotoColorEmoji.ttf", LIMINAL_NOTO_EMOJI_TTF);
+            if (fs::exists(emojiPath)) {
                 // Wide range covers symbols + emoji planes; ImWchar is 32-bit
                 // here (IMGUI_USE_WCHAR32), so plane-1 codepoints fit. In 1.92's
                 // dynamic font system ranges are advisory, but we keep an
@@ -163,14 +171,14 @@ EditorApp::EditorApp(std::string projectFile, bool startEmpty)
                 cfg.MergeMode = true;
                 cfg.OversampleH = cfg.OversampleV = 1;
                 cfg.FontLoaderFlags |= ImGuiFreeTypeBuilderFlags_LoadColor;
-                io.Fonts->AddFontFromFileTTF(LIMINAL_NOTO_EMOJI_TTF, 16.0f * scale,
+                io.Fonts->AddFontFromFileTTF(emojiPath.c_str(), 16.0f * scale,
                                              &cfg, kEmojiRanges);
             } else {
                 log("[editor] Noto Color Emoji not found, emoji glyphs disabled");
             }
 #endif
             m_titleFont =
-                io.Fonts->AddFontFromFileTTF(LIMINAL_EDITOR_FONT_TTF, 34.0f * scale);
+                io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 34.0f * scale);
         } else {
             log("[editor] JetBrains Mono not found, using default font");
         }
@@ -2163,7 +2171,8 @@ void EditorApp::seedLuaSkill() {
 #if !defined(LIMINAL_EDITOR_LUA_SKILL)
     return;
 #else
-    const std::string srcPath = LIMINAL_EDITOR_LUA_SKILL;
+    const std::string srcPath = liminal::editor::resolveResource(
+        "skills/liminal-lua/SKILL.md", LIMINAL_EDITOR_LUA_SKILL);
     if (srcPath.empty()) return;
 
     const fs::path dest = fs::path(m_projectFile).parent_path() /
