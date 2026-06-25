@@ -121,6 +121,9 @@ endif()
 # Build-Game player lookup are undisturbed); packaging is an explicit, opt-in
 # `cmake --build build --target package-mac`.
 if(APPLE AND LIMINAL_BUILD_PLAYER)
+    # Which icon set under assets/icons/macos/ to bake into the .icns.
+    set(LIMINAL_MACOS_ICON_VARIANT "light"
+        CACHE STRING "macOS app icon variant: light or dark")
     add_custom_target(package-mac
         COMMAND ${CMAKE_COMMAND}
             -DEDITOR_EXE=$<TARGET_FILE:liminal-editor>
@@ -129,6 +132,7 @@ if(APPLE AND LIMINAL_BUILD_PLAYER)
             -DEMOJI_TTF=${LIMINAL_NOTO_EMOJI_TTF}
             -DSKILL_MD=${LIMINAL_EDITOR_LUA_SKILL}
             -DSAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/sample_project
+            -DICON_DIR=${CMAKE_SOURCE_DIR}/assets/icons/macos/${LIMINAL_MACOS_ICON_VARIANT}
             -DOUT_DIR=${CMAKE_BINARY_DIR}/dist
             -DVERSION=${PROJECT_VERSION}
             -P ${CMAKE_SOURCE_DIR}/cmake/pack_macos.cmake

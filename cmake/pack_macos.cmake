@@ -73,6 +73,43 @@ if(SAMPLE_DIR AND EXISTS "${SAMPLE_DIR}")
     endif()
 endif()
 
+# App icon: build a Liminal.icns from the per-size PNGs in ICON_DIR and drop it
+# in Resources. iconutil wants an .iconset dir with @1x/@2x-named files; we own
+# 16/32/64/128/256/512/1024 so every slot maps to a real PNG (no upscaling).
+set(_icon_arg "")
+find_program(ICONUTIL iconutil)
+if(ICON_DIR AND EXISTS "${ICON_DIR}/liminal-1024.png" AND ICONUTIL)
+    set(iconset "${OUT_DIR}/Liminal.iconset")
+    file(REMOVE_RECURSE "${iconset}")
+    file(MAKE_DIRECTORY "${iconset}")
+    # dest-name -> source size
+    set(_map
+        icon_16x16=16     icon_16x16@2x=32
+        icon_32x32=32     icon_32x32@2x=64
+        icon_128x128=128  icon_128x128@2x=256
+        icon_256x256=256  icon_256x256@2x=512
+        icon_512x512=512  icon_512x512@2x=1024)
+    foreach(_pair ${_map})
+        string(REPLACE "=" ";" _kv "${_pair}")
+        list(GET _kv 0 _name)
+        list(GET _kv 1 _sz)
+        configure_file("${ICON_DIR}/liminal-${_sz}.png"
+                       "${iconset}/${_name}.png" COPYONLY)
+    endforeach()
+    execute_process(
+        COMMAND "${ICONUTIL}" -c icns "${iconset}" -o "${res}/Liminal.icns"
+        RESULT_VARIABLE _ic)
+    file(REMOVE_RECURSE "${iconset}")
+    if(_ic EQUAL 0)
+        set(_icon_arg "  <key>CFBundleIconFile</key><string>Liminal</string>\n")
+        message(STATUS "built ${res}/Liminal.icns")
+    else()
+        message(WARNING "iconutil failed (rc=${_ic}); bundle ships without an icon")
+    endif()
+else()
+    message(STATUS "no app icon (ICON_DIR/liminal-1024.png or iconutil missing)")
+endif()
+
 # Info.plist — CFBundleExecutable points macOS at the editor.
 file(WRITE "${app}/Contents/Info.plist"
 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -85,7 +122,7 @@ file(WRITE "${app}/Contents/Info.plist"
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleExecutable</key><string>liminal-editor</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
+${_icon_arg}  <key>CFBundlePackageType</key><string>APPL</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
 </dict>
