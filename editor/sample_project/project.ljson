@@ -1,4 +1,4 @@
 {
     "assetRoot": ".",
-    "startupScene": "scenes/main.lscene"
+    "startupScene": "scenes/maze.lscene"
 }
