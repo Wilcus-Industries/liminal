@@ -67,7 +67,12 @@ public:
     glm::vec3 localMin{0.0f};
     glm::vec3 localMax{0.0f};
 
-    // --- Primitive factories (unit-ish scale, base sitting on y=0) ---------
+    // --- Primitive factories (unit-ish scale) -----------------------------
+    // The architectural shapes (box, pyramid, pillar, arch, stair, plane, form)
+    // are centered on their AABB so the local origin is the visual center (what
+    // the MCP agent / DCC tools assume for Transform.position). The organic
+    // props (blob, tree, rock, crystal) and structure() keep their base on y=0
+    // for terrain placement.
     static Mesh box();                    // 1x1x1
     static Mesh pyramid();                // 1x1 base, height 1
     static Mesh pillar();                 // 0.4x0.4 footprint, height 2.4
@@ -95,7 +100,7 @@ public:
                           std::vector<PartBox>* outBoxes = nullptr);
     static Mesh groundPlane(float halfSize, float uvTiles);
     static Mesh quad();   // unit standing quad in the XY plane (z=0), for billboards/decals
-    static Mesh plane();  // a thin flat walkable slab, 1x1 footprint, base on y=0
+    static Mesh plane();  // a thin flat walkable slab, 1x1 footprint, AABB-centered
 
     // Stair geometry, shared so the collision system can reconstruct each step's
     // top surface (the single mesh AABB hides them). Step i (0..kStairSteps-1)

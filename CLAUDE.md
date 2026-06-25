@@ -99,7 +99,17 @@ src/
              Shader (throws on compile/link
              fail), Mesh (interleaved pos|normal|uv, flat-shaded, no index buffer,
              procedural primitives; shares the deterministic hashU32 noise
-             primitive with Texture via render/hash_detail.hpp), Texture (procedural RGBA8 + stb_image
+             primitive with Texture via render/hash_detail.hpp. Origin
+             convention is split: the architectural primitives (box, pyramid,
+             pillar, arch, stair, plane, form) are AABB-centered via the
+             anon-namespace centerMeshData(md) helper called at the end of each
+             factory — local origin = visual center, so Transform.position maps
+             to the middle (MCP-agent / DCC friendly); the organic props (blob,
+             tree, rock, crystal) and the composite structure() keep base-on-y=0
+             for terrain placement, quad is XY-centered (billboard pivot),
+             groundPlane is flat at y=0. localMin/localMax derive from the final
+             vertices so the gradient shader uGradBase + raycast/overlap AABBs
+             stay self-consistent after the shift), Texture (procedural RGBA8 + stb_image
              decoding PNG/JPEG/TGA/BMP — the formats buildGamePak ships; nearest
              filtering is load-bearing for the retro look. Min filter is
              GL_NEAREST_MIPMAP_NEAREST + glGenerateMipmap after upload (mag

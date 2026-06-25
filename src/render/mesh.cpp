@@ -6,9 +6,14 @@
 //     smooth normals (or normal-splitting bookkeeping). Duplicating the three
 //     vertices of every triangle is wasteful on paper but these meshes are
 //     tens of triangles — the PS1 itself pushed geometry the same way.
-//   - All primitives sit with their base on y=0, centered on x/z. The game
-//     places things by ground position + scale; baking the origin at the foot
-//     of the object keeps that math trivial.
+//   - Origin convention is split. The architectural primitives (box, pyramid,
+//     pillar, arch, stair, plane, form) are centered on their AABB so the
+//     object's local origin is its visual center — what DCC tools and the MCP
+//     agent assume when they read/write Transform.position. The organic props
+//     (blob, tree, rock, crystal) and the composite structure() keep their base
+//     on y=0, centered on x/z: procgen places those by ground position + scale,
+//     so baking the origin at the foot keeps that placement math trivial. quad
+//     is XY-centered (billboard pivot); groundPlane is flat at y=0.
 //   - Winding is kept consistently CCW-from-outside anyway, even though the
 //     renderer never enables face culling: the normals come from the winding
 //     (cross product), and lighting cares even if culling doesn't.
@@ -83,6 +88,27 @@ void addBox(MeshData& md, const glm::vec3& mn, const glm::vec3& mx) {
     // +y (top) / -y (bottom)
     md.addQuad({mn.x, mx.y, mx.z}, {mx.x, mx.y, mx.z}, {mx.x, mx.y, mn.z}, {mn.x, mx.y, mn.z});
     md.addQuad({mn.x, mn.y, mn.z}, {mx.x, mn.y, mn.z}, {mx.x, mn.y, mx.z}, {mn.x, mn.y, mx.z});
+}
+
+// Translate every vertex so the mesh's AABB center sits at the local origin.
+// Pure translation — normals and UVs are unaffected. Used by the architectural
+// primitives so Transform.position maps to the object's visual center (the
+// convention DCC tools and the MCP agent assume).
+void centerMeshData(MeshData& md) {
+    if (md.vertices.empty()) return;
+    glm::vec3 mn(std::numeric_limits<float>::max());
+    glm::vec3 mx(std::numeric_limits<float>::lowest());
+    for (size_t i = 0; i < md.vertices.size(); i += 8) {
+        glm::vec3 p(md.vertices[i], md.vertices[i + 1], md.vertices[i + 2]);
+        mn = glm::min(mn, p);
+        mx = glm::max(mx, p);
+    }
+    const glm::vec3 c = (mn + mx) * 0.5f;
+    for (size_t i = 0; i < md.vertices.size(); i += 8) {
+        md.vertices[i]     -= c.x;
+        md.vertices[i + 1] -= c.y;
+        md.vertices[i + 2] -= c.z;
+    }
 }
 
 // Same deterministic hash family as Texture's noise — blob shapes must be
@@ -332,13 +358,16 @@ void Mesh::draw() const {
 Mesh Mesh::box() {
     MeshData md;
     addBox(md, {-0.5f, 0.0f, -0.5f}, {0.5f, 1.0f, 0.5f});
+    centerMeshData(md);
     return Mesh(md);
 }
 
 Mesh Mesh::pyramid() {
     MeshData md;
+    // Built foot-on-y=0, then centerMeshData() shifts the whole mesh down so
+    // the AABB midpoint (y=0.5) lands on the origin.
     const glm::vec3 apex(0.0f, 1.0f, 0.0f);
-    // Base corners, y=0.
+    // Base corners, y=0 (pre-centering).
     const glm::vec3 fl(-0.5f, 0.0f, 0.5f);  // front-left  (+z)
     const glm::vec3 fr(0.5f, 0.0f, 0.5f);   // front-right
     const glm::vec3 br(0.5f, 0.0f, -0.5f);  // back-right  (-z)
@@ -352,19 +381,22 @@ Mesh Mesh::pyramid() {
     md.addTriangle(bl, fl, apex, uv0, uv1, uvTop); // -x
     // Base, facing down.
     md.addQuad(bl, br, fr, fl);
+    centerMeshData(md);
     return Mesh(md);
 }
 
 Mesh Mesh::pillar() {
     MeshData md;
     addBox(md, {-0.2f, 0.0f, -0.2f}, {0.2f, 2.4f, 0.2f});
+    centerMeshData(md);
     return Mesh(md);
 }
 
 Mesh Mesh::arch() {
     // Two 0.3-wide pillars centered at x = +/-0.85 (outer edges at +/-1.0),
     // 2.0 tall, plus a lintel box bridging the gap on top. One mesh, one
-    // draw call — the dream doesn't need an articulated arch.
+    // draw call — the dream doesn't need an articulated arch. Built foot-on-y=0
+    // below, then centerMeshData() recenters it on the AABB midpoint.
     MeshData md;
     const float halfW = 0.15f;  // pillar half-width (0.3 wide in x and z)
     const float height = 2.0f;
@@ -372,6 +404,7 @@ Mesh Mesh::arch() {
     addBox(md, {0.85f - halfW, 0.0f, -halfW}, {0.85f + halfW, height, halfW});
     // Lintel: 2.0 x 0.35 x 0.3, sitting on the pillar tops at y=2.0.
     addBox(md, {-1.0f, height, -halfW}, {1.0f, height + 0.35f, halfW});
+    centerMeshData(md);
     return Mesh(md);
 }
 
@@ -386,7 +419,8 @@ Mesh Mesh::blob(unsigned int seed) {
 Mesh Mesh::stair() {
     // Five full-height boxes rather than an optimized staircase shell: the
     // hidden faces are a handful of triangles, and solid boxes mean the AABB
-    // and any future per-step collision stay dead simple.
+    // and any future per-step collision stay dead simple. Built foot-on-y=0
+    // and z starting at 0, then centerMeshData() recenters on the AABB.
     MeshData md;
     const float halfW = kStairHalfWidth; // 1.4 wide in x
     const float rise = kStairRise;
@@ -396,6 +430,7 @@ Mesh Mesh::stair() {
                {-halfW, 0.0f, static_cast<float>(i) * run},
                {halfW, static_cast<float>(i + 1) * rise, static_cast<float>(i + 1) * run});
     }
+    centerMeshData(md);
     return Mesh(md);
 }
 
@@ -407,6 +442,8 @@ Mesh Mesh::form(int sides, float twist, float taper, unsigned int seed) {
     taper = std::clamp(taper, 0.0f, 1.0f);
     twist = std::clamp(twist, 0.0f, 0.9f);
 
+    // Built bottom-ring-on-y=0 below; centerMeshData() at the end shifts the
+    // whole prism so its AABB midpoint sits on the local origin.
     const float baseR = 0.5f;             // bottom-ring radius
     const float topR = baseR * taper;     // 0 -> apex (cone)
     const float height = 1.6f;            // before the object's own scale
@@ -463,6 +500,7 @@ Mesh Mesh::form(int sides, float twist, float taper, unsigned int seed) {
                            top[static_cast<size_t>(i + 1)], uv, uv, uv);
         }
     }
+    centerMeshData(md);
     return Mesh(md);
 }
 
@@ -758,15 +796,17 @@ Mesh Mesh::quad() {
 }
 
 Mesh Mesh::plane() {
-    // A thin horizontal slab: 1x1 footprint in x/z, 0.1 thick, base on y=0 so
-    // the walkable top sits at y=0.1. A solid box (not a single quad) so the
-    // AABB is a real volume the collision system can stand on, and so the slab
-    // reads as a physical platform from any angle rather than vanishing edge-on.
-    // It takes no tilt params: the game lifts it to its elevation and bakes any
-    // pitch/roll into the model matrix, which keeps this local AABB a clean flat
-    // top — exactly what the collision query wants to resolve against.
+    // A thin horizontal slab: 1x1 footprint in x/z, 0.1 thick. A solid box (not
+    // a single quad) so the AABB is a real volume the collision system can stand
+    // on, and so the slab reads as a physical platform from any angle rather
+    // than vanishing edge-on. centerMeshData() recenters it on the AABB, so the
+    // origin lands mid-slab (top at +0.05, bottom at -0.05). It takes no tilt
+    // params: the game lifts it to its elevation and bakes any pitch/roll into
+    // the model matrix, which keeps this local AABB a clean flat top — exactly
+    // what the collision query wants to resolve against.
     MeshData md;
     addBox(md, {-0.5f, 0.0f, -0.5f}, {0.5f, 0.1f, 0.5f});
+    centerMeshData(md);
     return Mesh(md);
 }
 
