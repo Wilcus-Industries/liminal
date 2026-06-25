@@ -32,8 +32,15 @@ add_executable(liminal-editor
 target_include_directories(liminal-editor PRIVATE
     ${imguizmo_SOURCE_DIR}/src
     ${imguicolortextedit_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/misc/freetype  # imgui_freetype.h for the LoadColor flag
     ${libvterm_SOURCE_DIR}/include
     ${libvterm_SOURCE_DIR}/src)
+
+# The FreeType atlas builder (imgui_freetype.cpp) is compiled into liminal_imgui
+# in the root CMakeLists when LIMINAL_BUILD_EDITOR is on; IMGUI_ENABLE_FREETYPE
+# and the freetype link reach this target PUBLIC-ly through liminal::imgui. The
+# editor only needs the misc/freetype include dir above so editor_app.cpp can
+# include <imgui_freetype.h> for ImGuiFreeTypeBuilderFlags_LoadColor.
 
 # Warn on our own editor sources only — the in-tree vendored sources (ImGuizmo,
 # ImGuiColorTextEdit, libvterm) share this target but must not be warned on.
@@ -98,4 +105,12 @@ endif()
 if(LIMINAL_JETBRAINS_MONO_TTF)
     target_compile_definitions(liminal-editor PRIVATE
         LIMINAL_EDITOR_FONT_TTF="${LIMINAL_JETBRAINS_MONO_TTF}")
+endif()
+
+# Bakes the Noto Color Emoji path fetched in cmake/Dependencies.cmake; merged
+# over JetBrains Mono into the editor atlas with the FreeType LoadColor flag.
+# Runtime fs::exists guards a missing download, so this is best-effort.
+if(LIMINAL_NOTO_EMOJI_TTF)
+    target_compile_definitions(liminal-editor PRIVATE
+        LIMINAL_NOTO_EMOJI_TTF="${LIMINAL_NOTO_EMOJI_TTF}")
 endif()

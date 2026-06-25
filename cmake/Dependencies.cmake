@@ -208,6 +208,37 @@ if(LIMINAL_BUILD_EDITOR)
     FetchContent_MakeAvailable(jetbrains_mono)
     set(LIMINAL_JETBRAINS_MONO_TTF
         "${jetbrains_mono_SOURCE_DIR}/fonts/ttf/JetBrainsMono-Regular.ttf")
+
+    # FreeType — backs ImGui's imgui_freetype builder so the editor atlas can
+    # rasterize the color-bitmap (CBDT) Noto Color Emoji face merged over
+    # JetBrains Mono. We only need the standalone rasterizer, so disable every
+    # optional dependency (harfbuzz/png/zlib/bzip2/brotli) to keep the build lean
+    # and hermetic — FreeType builds fine standalone without them. The CMake
+    # target is `freetype`; liminal-editor links it and compiles ImGui's
+    # misc/freetype/imgui_freetype.cpp from the imgui source tree (see
+    # editor/CMakeLists.txt). Pinned to a stable 2.13.x release.
+    set(FT_DISABLE_HARFBUZZ  ON  CACHE BOOL "" FORCE)
+    set(FT_DISABLE_PNG       ON  CACHE BOOL "" FORCE)
+    set(FT_DISABLE_ZLIB      ON  CACHE BOOL "" FORCE)
+    set(FT_DISABLE_BZIP2     ON  CACHE BOOL "" FORCE)
+    set(FT_DISABLE_BROTLI    ON  CACHE BOOL "" FORCE)
+    FetchContent_Declare(freetype
+        GIT_REPOSITORY https://github.com/freetype/freetype
+        GIT_TAG        VER-2-13-3
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(freetype)
+
+    # Noto Color Emoji — Google's CBDT/CBLC color-bitmap face, the build
+    # ImGuiFreeTypeBuilderFlags_LoadColor consumes. It's a single TTF (no
+    # archive), so DOWNLOAD_NO_EXTRACT drops it verbatim in the source dir and we
+    # bake the absolute path like JetBrains Mono. If the download is unavailable
+    # the editor font block guards on fs::exists and runs without emoji.
+    FetchContent_Declare(noto_emoji
+        URL https://github.com/googlefonts/noto-emoji/raw/v2.047/fonts/NotoColorEmoji.ttf
+        DOWNLOAD_NO_EXTRACT TRUE)
+    FetchContent_MakeAvailable(noto_emoji)
+    set(LIMINAL_NOTO_EMOJI_TTF
+        "${noto_emoji_SOURCE_DIR}/NotoColorEmoji.ttf")
 endif()
 
 # glad: generate a static loader for exactly the GL version we target.
