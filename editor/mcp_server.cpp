@@ -8,6 +8,8 @@
 // OpenSSL — plaintext localhost only (CPPHTTPLIB_OPENSSL_SUPPORT stays off).
 #include <httplib.h>
 
+#include <liminal/version.hpp>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -370,7 +372,7 @@ nlohmann::json McpServer::handleRpc(const nlohmann::json& req) {
         nlohmann::json result = {
             {"protocolVersion", kProtocolVersion},
             {"capabilities", {{"tools", nlohmann::json::object()}}},
-            {"serverInfo", {{"name", kServerName}, {"version", "0.1.0"}}}};
+            {"serverInfo", {{"name", kServerName}, {"version", liminal::kVersionString}}}};
         return rpcResult(id, result);
     }
     if (method == "notifications/initialized" || method == "notifications/cancelled") {
