@@ -275,6 +275,26 @@ void EditorApp::run() {
         if (m_mode == Mode::Play && !m_paused && m_scripts)
             m_scripts->update(m_scene, m_dt);
 
+        // Deferred lm.scene.change swap (Play only): a script requested a new
+        // scene this frame. Swap AFTER the update so the running scripts finish
+        // cleanly, then rebuild the host against the new scene. The pre-Play
+        // snapshot is left untouched, so Stop still restores the original scene
+        // and the swapped-to scene is discarded.
+        if (m_mode == Mode::Play && !m_pendingPlayScene.empty()) {
+            const std::string path = m_pendingPlayScene;
+            m_pendingPlayScene.clear();
+            try {
+                Scene loaded = Scene::load(Assets::resolve(path));
+                m_scene = std::move(loaded);
+                m_selected = entt::null; // entt ids reset on load
+                buildPlayScriptHost();   // fresh instances vs the new scene
+                log("[editor] play: scene -> " + path);
+            } catch (const std::exception& ex) {
+                log(std::string("[script] lm.scene.change failed: ") +
+                    ex.what());
+            }
+        }
+
         // Render the scene into the renderer's low-res FBO. endFrame's blit to
         // the backbuffer is fully covered by the dockspace; the viewport panel
         // shows colorTexture() instead.
@@ -1882,8 +1902,14 @@ void EditorApp::startPlay() {
         if (a->ok()) m_audio = std::move(a);
     }
     if (m_audio) m_audio->params.enabled = true;
-    // Fresh host per play session: clean Lua state, on_start re-runs,
-    // parked-error memory wiped.
+    buildPlayScriptHost();
+    log("[editor] play");
+}
+
+// Build (or rebuild) the Play-session ScriptHost: fresh Lua state, on_start
+// re-runs, parked-error memory wiped. Called by startPlay and again after a
+// mid-Play lm.scene.change swap so the new scene gets fresh script instances.
+void EditorApp::buildPlayScriptHost() {
     ScriptContext ctx;
     ctx.input = &m_window;
     ctx.audio = m_audio.get();
@@ -1895,15 +1921,17 @@ void EditorApp::startPlay() {
     if (!m_inference) m_inference = std::make_unique<inference::Engine>();
     ctx.inference = m_inference.get();
 #endif
-    ctx.requestSceneChange = [this](const std::string&) {
-        log("[script] lm.scene.change unsupported in editor Play");
+    // Stash the requested scene; the run loop performs the deferred swap right
+    // after the script update (the snapshot is untouched so Stop still restores
+    // the original pre-Play scene).
+    ctx.requestSceneChange = [this](const std::string& path) {
+        m_pendingPlayScene = path;
     };
     m_scripts = std::make_unique<ScriptHost>(std::move(ctx));
     m_scripts->setErrorSink(
         [this](const std::string& msg) { log("[lua] " + msg); });
     m_scripts->setLogSink(
         [this](const std::string& msg) { log("[lua] " + msg); });
-    log("[editor] play");
 }
 
 void EditorApp::stopPlay() {
@@ -1916,6 +1944,7 @@ void EditorApp::stopPlay() {
     if (m_inference) m_inference->stop();
 #endif
     if (m_audio) m_audio->params.enabled = false; // mute, keep device alive
+    m_pendingPlayScene.clear(); // drop a swap requested the same frame as Stop
     m_scene = Scene();
     sceneFromJson(m_scene, m_playSnapshot);
     m_playSnapshot = nullptr;
