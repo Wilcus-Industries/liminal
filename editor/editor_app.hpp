@@ -164,6 +164,7 @@ private:
     Entity duplicateEntity(entt::entity src);
     void startPlay();
     void stopPlay();
+    void buildPlayScriptHost();
 
     // --- undo/redo (Edit mode scene edits) ---
     // Apply an undo/redo step: remember the current selection's Name, restore
@@ -278,6 +279,7 @@ private:
     Mode m_mode = Mode::Edit;
     bool m_paused = false;
     nlohmann::json m_playSnapshot;
+    std::string m_pendingPlayScene; // lm.scene.change target during Play; swapped after script update
 
     // --- per-frame state the panels share ---
     // Viewport window rect in ImGui screen coords, refreshed each frame by
