@@ -212,7 +212,7 @@ Notes:
 
 Swap scenes at runtime with `lm.scene.change("scenes/x.lscene")` — it loads the
 target in the standalone player and in editor Play; in editor Play pressing Stop
-restores the original pre-Play scene (the swap is deferred only in the player).
+restores the original pre-Play scene (the swapped-to scene is discarded on Stop).
 
 ## Math types
 
