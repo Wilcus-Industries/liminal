@@ -517,6 +517,28 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              useShaderPack(cam.shaderName) each frame (default "native" when there is
              no primary camera), so the editor previews the selected shader in edit
              mode too.
+             update_check (editor/update_check.{hpp,cpp}, namespace liminal::editor):
+             self-update warning. On the FIRST project open EditorApp::startUpdateCheck()
+             (guarded by m_updateCheckStarted = once per editor session, called at the
+             end of openProject after startMcpServer) spawns a DETACHED std::thread that
+             fetchLatestReleaseTag()s GitHub's
+             api.github.com/repos/wilcus-industries/liminal/releases/latest (latest
+             STABLE = non-prerelease/non-draft). There is NO HTTPS client in the tree
+             (cpp-httplib is plaintext-only, no curl/libcurl linked), so the fetch
+             SHELLS OUT to system `curl` (the platform::openUrl std::system idiom) into
+             a temp file (temp_directory_path()/liminal_update_check.json), parsed with
+             nlohmann (tag_name). The worker owns a copy of a shared_ptr<UpdateCheckState>
+             {atomic Status Checking|UpToDate|OutOfDate|Failed + mutex'd latestTag} so it
+             stays safe past EditorApp destruction (no join). parseSemver (strips leading
+             v, tolerates -rc/+build suffix) + isNewer (strict semver >) compare the tag
+             to kVersionString; behind → OutOfDate. drawMenuBar() calls drawUpdateWarning()
+             (after the scene-path TextDisabled, before EndMenuBar) which RIGHT-ALIGNS a
+             red (IM_COL32(230,60,60)) clickable "⚠ Update available: <tag>" — hover =
+             hand cursor + tooltip, click = openUrl(kRepoUrl + "/releases/latest"). Any
+             failure (no curl, offline, no published release → 404, parse error) resolves
+             to "" → Failed → NO warning (convenience state, never load-bearing). Requires
+             system curl (macOS/most Linux/Win10+); unauth GitHub API = 60 req/hr, the
+             once-per-session guard keeps us far under it.
 player/      liminal-player: standalone runtime. Locates its pak (appended to its own
              binary via platform::selfExePath, or a sidecar .pak), mounts the VFS
              (Assets::mountPak), runs App with hotReload off. After App is

@@ -33,6 +33,7 @@
 #include "mcp_server.hpp"
 #include "recent_projects.hpp"
 #include "edit_history.hpp"
+#include "update_check.hpp"
 
 struct ImFont;
 
@@ -181,6 +182,11 @@ private:
     void startMcpServer();
     void writeMcpJson(int port);
 
+    // Update check: launch the once-per-session GitHub release probe (detached),
+    // and paint the resulting red "update available" warning on the menubar.
+    void startUpdateCheck();
+    void drawUpdateWarning();
+
     // Seed the canonical liminal-lua Claude Code skill into the opened
     // project's .claude/skills/ if absent (never overwrites a customized one).
     void seedLuaSkill();
@@ -237,6 +243,12 @@ private:
     // Started on first project open; pump()ed each frame on the main thread so
     // its tools read m_scene / project fields safely (see mcp_server.hpp).
     std::unique_ptr<McpServer> m_mcp;
+
+    // --- update check (background, once per session) ---
+    // Kicked on the first project open; the detached worker writes the result
+    // into the shared state and the menubar paints a red warning when behind.
+    std::shared_ptr<UpdateCheckState> m_updateCheck;
+    bool m_updateCheckStarted = false;
 
     // --- project ---
     std::string m_projectFile; // absolute path of project.ljson, "" = none

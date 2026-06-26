@@ -25,6 +25,7 @@ add_executable(liminal-editor
     lua_complete.cpp
     terminal_panel.cpp
     mcp_server.cpp
+    update_check.cpp
     ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp
     ${imguicolortextedit_SOURCE_DIR}/TextEditor.cpp
     ${LIBVTERM_SOURCES})
@@ -47,6 +48,7 @@ target_include_directories(liminal-editor PRIVATE
 set_source_files_properties(
     main.cpp editor_app.cpp recent_projects.cpp theme.cpp
     script_editor.cpp lua_complete.cpp terminal_panel.cpp mcp_server.cpp
+    update_check.cpp
     PROPERTIES COMPILE_OPTIONS "${LIMINAL_WARNING_FLAGS}")
 
 # glfw for GLFW_KEY_* constants; liminal_imgui already carries the ImGui

@@ -42,6 +42,7 @@
 #include <functional>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -984,6 +985,7 @@ void EditorApp::drawMenuBar() {
                             m_scenePath.empty() ? "(unsaved scene)"
                                                 : m_scenePath.c_str(),
                             m_mode == Mode::Play ? "  [PLAY]" : "");
+        drawUpdateWarning();
         ImGui::EndMenuBar();
     }
 
@@ -1640,6 +1642,10 @@ void EditorApp::openProject(const std::string& projectFile) {
     // path / dir are known. Non-fatal if it fails (logged inside).
     startMcpServer();
 
+    // Probe GitHub for a newer stable release (once per editor session). The
+    // guard inside makes repeat opens cheap; the warning paints on the menubar.
+    startUpdateCheck();
+
     // Remember this project for the landing screen, and leave the chooser.
     recordRecentProject(m_projectFile, m_projectTitle);
     // Grow back to the full editor size if we came from the compact chooser.
@@ -1980,6 +1986,64 @@ entt::entity EditorApp::resolveEntity(const std::string& idOrName) {
         if (n && n->value == idOrName) return e;
     }
     return entt::null;
+}
+
+void EditorApp::startUpdateCheck() {
+    if (m_updateCheckStarted) return; // once per editor session
+    m_updateCheckStarted = true;
+    m_updateCheck = std::make_shared<UpdateCheckState>();
+
+    // Detached worker: it owns a copy of the shared_ptr, so the probe stays safe
+    // even if EditorApp is destroyed before curl returns (no join needed). Any
+    // fetch failure resolves to Failed -> no warning.
+    auto state = m_updateCheck;
+    std::thread([state]() {
+        using Status = UpdateCheckState::Status;
+        const std::string tag = fetchLatestReleaseTag();
+        if (tag.empty()) {
+            state->status.store(Status::Failed);
+            return;
+        }
+        if (isNewer(tag, kVersionString)) {
+            {
+                std::lock_guard<std::mutex> lk(state->mtx);
+                state->latestTag = tag;
+            }
+            state->status.store(Status::OutOfDate);
+        } else {
+            state->status.store(Status::UpToDate);
+        }
+    }).detach();
+}
+
+void EditorApp::drawUpdateWarning() {
+    if (!m_updateCheck) return;
+    if (m_updateCheck->status.load() != UpdateCheckState::Status::OutOfDate) return;
+
+    std::string tag;
+    {
+        std::lock_guard<std::mutex> lk(m_updateCheck->mtx);
+        tag = m_updateCheck->latestTag;
+    }
+    const std::string label = "\xE2\x9A\xA0 Update available: " + tag; // U+26A0 ⚠
+
+    // Right-align on the menubar row; skip if there isn't room (avoid overlap
+    // with the scene-path label drawn just before this).
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float w = ImGui::CalcTextSize(label.c_str()).x;
+    const float avail = ImGui::GetContentRegionAvail().x;
+    if (avail > w + style.ItemSpacing.x)
+        ImGui::SameLine(ImGui::GetCursorPosX() + avail - w - style.ItemSpacing.x);
+
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(230, 60, 60, 255));
+    ImGui::TextUnformatted(label.c_str());
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::SetTooltip("Open the releases page");
+    }
+    if (ImGui::IsItemClicked())
+        openUrl(std::string(kRepoUrl) + "/releases/latest");
 }
 
 void EditorApp::startMcpServer() {
