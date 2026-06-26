@@ -134,6 +134,15 @@ EditorApp::EditorApp(std::string projectFile, bool startEmpty)
       m_imgui(m_window) {
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
+    // Persist the dock layout to a stable per-user file instead of ImGui's
+    // CWD-relative default (which varies run-from-build vs packaged .app, so
+    // the layout wouldn't reliably round-trip). First launch: file absent ->
+    // buildDefaultLayout fires -> ImGui auto-saves here on exit -> reloaded
+    // every later launch. userConfigDir() creates ~/.liminal on first use.
+    // m_iniPath must outlive the ctor: ImGui keeps the raw const char*.
+    m_iniPath = (userConfigDir() / "editor_layout.ini").string();
+    ImGui::GetIO().IniFilename = m_iniPath.c_str();
+
 #ifdef LIMINAL_EDITOR_FONT_TTF
     // JetBrains Mono as the default font (first face added wins). Size by the
     // window's content scale and shrink FontGlobalScale back so retina renders
@@ -756,7 +765,17 @@ void EditorApp::drawUi() {
     ImGui::PopStyleVar(3);
 
     const ImGuiID dockId = ImGui::GetID("LiminalDockSpace");
-    if (ImGui::DockBuilderGetNode(dockId) == nullptr) buildDefaultLayout(dockId);
+    if (m_resetLayout) {
+        // Reset Layout: drop the current split tree, restore the default panels
+        // at their fixed uids, and rebuild the base docking. Runs before the
+        // panel draw loop, so re-seeding m_panels here is iteration-safe.
+        m_resetLayout = false;
+        ImGui::DockBuilderRemoveNode(dockId);
+        seedDefaultPanels();
+        buildDefaultLayout(dockId);
+    } else if (ImGui::DockBuilderGetNode(dockId) == nullptr) {
+        buildDefaultLayout(dockId);
+    }
     ImGui::DockSpace(dockId);
 
     drawMenuBar(); // may append panels (Tools menu) — safe: before the loop
@@ -858,6 +877,12 @@ void EditorApp::buildDefaultLayout(unsigned int dockspaceId) {
     ImGui::DockBuilderFinish(dockId);
 }
 
+void EditorApp::resetLayout() {
+    // Deferred: the menu item runs after the dockspace block in drawUi, so the
+    // actual rebuild happens at the top of the next frame's drawUi.
+    m_resetLayout = true;
+}
+
 void EditorApp::applyTheme(const std::string& name) {
     const theme::Theme* t = theme::find(name);
     if (!t) {
@@ -951,6 +976,8 @@ void EditorApp::drawMenuBar() {
             if (ImGui::MenuItem("New Console"))       addPanel(PanelKind::Console);
             if (ImGui::MenuItem("New Terminal"))      addPanel(PanelKind::Terminal);
             if (ImGui::MenuItem("New Script Editor")) addPanel(PanelKind::ScriptEditor);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reset Layout"))      resetLayout();
             ImGui::EndMenu();
         }
         ImGui::TextDisabled("| %s%s",

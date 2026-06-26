@@ -251,9 +251,22 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              buildDefaultLayout docks by the "Title##uid" strings; addPanel(kind)
              appends at the next uid (Terminal/ScriptEditor construct their
              sub-panel via makeTerminal/makeScriptEditor, wired identically to the
-             defaults). A new "Tools" main-menu (after Theme) spawns a fresh
-             instance of any panel (New Hierarchy / Inspector / Viewport / Asset
-             Browser / Console / Terminal / ScriptEditor) — it runs in drawMenuBar
+             defaults). LAYOUT PERSISTENCE: the ctor points io.IniFilename at a
+             stable per-user file userConfigDir()/editor_layout.ini (held in the
+             m_iniPath member — ImGui keeps the raw const char*) instead of the
+             CWD-relative default, so the dock layout reliably round-trips across
+             launches (and run-from-build vs packaged .app). buildDefaultLayout
+             still only fires on the first frame with no saved node (line-759
+             guard), so first launch builds the base layout and ImGui auto-saves
+             it. RESET LAYOUT: Tools menu → "Reset Layout" (after the New-panel
+             items) calls resetLayout() which sets m_resetLayout (deferred — the
+             menu runs after the dockspace block); the next drawUi top
+             DockBuilderRemoveNode(dockId) + seedDefaultPanels() (re-seeds the 7
+             defaults at uids 1..7, reopening any closed/minimized panels, stops
+             live terminals) + buildDefaultLayout, before DockSpace + the panel
+             loop (iteration-safe). A new "Tools" main-menu (after Theme) spawns a
+             fresh instance of any panel (New Hierarchy / Inspector / Viewport /
+             Asset Browser / Console / Terminal / ScriptEditor) — it runs in drawMenuBar
              BEFORE the panel draw loop, so the addPanel append is iteration-safe
              (the Asset-Browser "open file when no ScriptEditor exists" path
              instead DEFERS its spawn to after the loop via

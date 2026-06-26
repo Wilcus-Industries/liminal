@@ -109,6 +109,9 @@ private:
     void drawScriptEditor(PanelInstance& inst);
     void drawTerminal(PanelInstance& inst);
     void buildDefaultLayout(unsigned int dockspaceId);
+    // Request a layout reset: re-seed the default panels and rebuild the base
+    // docking next frame (deferred — menu items run after the dockspace block).
+    void resetLayout();
 
     // Seed the default one-of-each panel set at fixed startup uids (Hierarchy=1
     // .. ScriptEditor=7) so buildDefaultLayout's title strings dock them. Resets
@@ -224,6 +227,7 @@ private:
     std::vector<PanelInstance> m_panels;
     int m_nextPanelUid = 1;       // next "##<uid>" suffix to hand out
     int m_activeViewportUid = 0;  // the Viewport instance that owns camera/pick
+    bool m_resetLayout = false;   // pending Reset Layout (applied in drawUi)
     // A file double-clicked in the Asset Browser when NO ScriptEditor exists:
     // open it in a freshly spawned ScriptEditor AFTER the panel loop (spawning
     // mid-loop would reallocate m_panels). Empty = nothing pending.
@@ -240,6 +244,9 @@ private:
     std::string m_scenePath;   // current scene file, "" = unsaved
     std::string m_projectTitle;   // project title (defaults to folder name)
     std::string m_startupScene;   // startupScene from project.ljson (as written)
+    // Stable per-user ImGui ini path (~/.liminal/editor_layout.ini). Held as a
+    // member because io.IniFilename stores the raw pointer, not a copy.
+    std::string m_iniPath;
 
     // --- selection / gizmo ---
     entt::entity m_selected = entt::null;
