@@ -505,8 +505,11 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              LIMINAL_EDITOR_LUA_SKILL) into `<projectDir>/.claude/skills/
              liminal-lua/SKILL.md` if absent — never clobbers a customized one,
              skips when dest == source (the sample itself), logged + non-fatal.
-             The skill documents the `lm` Lua API + script lifecycle so the
-             `claude` in the Terminal panel can author scripts accurately.
+             The skill documents the `lm` Lua API + script lifecycle AND the
+             `.lscene` scene-file JSON schema (top-level `"liminal_scene": 1`
+             version key, entities/components layout, exact per-component field
+             names) so the `claude` in the Terminal panel can author scripts AND
+             hand-write/repair scene files accurately.
              Custom shader discovery (scanShaders): on project open the editor
              scans `<projectDir>/shaders/` and registers a pack per entry, then
              rebuilds shaderCatalog() = {"native","retro", ...discovered} for the

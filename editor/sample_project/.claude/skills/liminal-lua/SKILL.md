@@ -122,6 +122,98 @@ Fetch via the accessors above. Field names:
 fields beyond `get_component` returning nil/an opaque handle — drive audio/AI
 through the `lm.*` namespaces below.
 
+## Scene file format (`.lscene`)
+
+A scene is a JSON document (`scenes/*.lscene`). **Prefer to build or edit scenes
+with the in-editor MCP tools** (`create_entity`, `set_component`,
+`destroy_entity`, then `save_scene`) — they always emit a valid document. Hand-
+writing a `.lscene` is a fallback; if you do, you **must** include the top-level
+`"liminal_scene": 1` key or the load fails with
+`not a liminal_scene v1 document`.
+
+**Required top-level schema:**
+
+```json
+{
+  "liminal_scene": 1,
+  "entities": [
+    {
+      "id": 0,
+      "components": {
+        "Name": { "value": "..." },
+        "Transform": { "position": [0,0,0], "rotationEuler": [0,0,0], "scale": [1,1,1] }
+      }
+    }
+  ]
+}
+```
+
+Notes:
+- `"liminal_scene": 1` is the version marker — **load fails without it.**
+- `id` is debug-only and is **not** preserved across a load: entities get fresh
+  entt ids assigned in file order. Never rely on a specific id.
+- `components` maps a registry component **name** → that component's JSON body.
+- An unknown component name **warns on stderr and is skipped** (never fatal), so
+  a typo'd component just silently vanishes from the loaded entity.
+- The JSON field names are the **serialized** names, which differ from the Lua
+  usertype field names above: `meshAsset`/`textureAsset` (not `.mesh`/`.texture`),
+  `rotationEuler` (not `.rotation`), `fovDeg`/`nearZ`/`farZ` (not `.fov`/etc).
+- `Transform.rotationEuler` is in **degrees**, applied yaw→pitch→roll = Y→X→Z
+  (so `[pitch, yaw, roll]` order in the array is `x, y, z`).
+
+**Component JSON bodies** (defaults shown; omit a field to take its default):
+- `Name`: `{ "value": "crate" }`
+- `Transform`: `{ "position": [0,0,0], "rotationEuler": [0,0,0], "scale": [1,1,1] }`
+- `Camera`: `{ "fovDeg": 70.0, "nearZ": 0.1, "farZ": 220.0, "primary": true, "shaderName": "native" }`
+- `MeshRenderer`: `{ "meshAsset": "builtin:box", "color": [1,1,1,1], "color2": [1,1,1,1], "textureAsset": "builtin:white" }`
+  (`color` = gradient bottom tint, `color2` = top tint; omit `color2` to match
+  `color`. `textureAsset` may be `""` for untextured.)
+- `Light`: `{ "color": [1,1,1], "intensity": 1.0 }`
+- `Script`: `{ "paths": ["scripts/foo.lua"] }` (one entity may list several scripts)
+- `Collider`: `{ "center": [0,0,0], "halfExtents": [0,0,0] }` (zero `halfExtents`
+  = derive from mesh bounds at query time)
+- `Billboard`: `{ "yawOnly": true }`
+- `AudioSource`: `{ "gain": 0.14, "enabled": true }`
+
+**Minimal valid scene** — a primary camera + one textured cube + a light:
+
+```json
+{
+  "liminal_scene": 1,
+  "entities": [
+    {
+      "id": 0,
+      "components": {
+        "Name": { "value": "player" },
+        "Camera": { "fovDeg": 75.0, "nearZ": 0.1, "farZ": 220.0, "primary": true, "shaderName": "native" },
+        "Script": { "paths": ["scripts/player.lua"] },
+        "Transform": { "position": [0,2,6], "rotationEuler": [-12,0,0], "scale": [1,1,1] }
+      }
+    },
+    {
+      "id": 1,
+      "components": {
+        "Name": { "value": "cube" },
+        "MeshRenderer": { "meshAsset": "builtin:box", "color": [0.8,0.8,0.85,1.0], "textureAsset": "builtin:concrete" },
+        "Transform": { "position": [0,0.5,0], "rotationEuler": [0,0,0], "scale": [1,1,1] }
+      }
+    },
+    {
+      "id": 2,
+      "components": {
+        "Name": { "value": "light" },
+        "Light": { "color": [1,1,1], "intensity": 1.0 },
+        "Transform": { "position": [3,5,2], "rotationEuler": [0,0,0], "scale": [1,1,1] }
+      }
+    }
+  ]
+}
+```
+
+Swap scenes at runtime with `lm.scene.change("scenes/x.lscene")` — it loads the
+target in the standalone player and in editor Play; in editor Play pressing Stop
+restores the original pre-Play scene (the swap is deferred only in the player).
+
 ## Math types
 
 - `vec3(x,y,z)` (or `vec3()`, `vec3(s)`) — fields `.x .y .z`, supports `+ - *`
