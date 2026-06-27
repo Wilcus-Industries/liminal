@@ -19,3 +19,30 @@ The game engine for agents.
 - Fully static shipping builds.
 - Built in Claude Code support in the editor (MCP workspace, Lua `lm` library skill for scripting)
 - ECS system built in (EnTT).
+
+## Building
+
+Requires CMake 3.20+ and a C++20 compiler.
+
+### Mac
+
+```sh
+xcode-select --install
+cmake -B build
+cmake --build build -j
+```
+
+### Linux
+
+```sh
+sudo apt install build-essential cmake libgl1-mesa-dev xorg-dev
+cmake -B build
+cmake --build build -j
+```
+
+### Windows
+
+```sh
+cmake -B build
+cmake --build build --config Release -j
+```
