@@ -24,6 +24,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <liminal/render/mesh.hpp>
 #include <liminal/render/texture.hpp>
@@ -53,6 +54,12 @@ public:
     // warn-once memo for that key. Returns the storage key. Backs
     // lm.assets.add_texture. Texture is move-only, so it is taken by value.
     std::string addTexture(const std::string& name, Texture texture);
+
+    // Currently-loaded keys (builtins are created lazily, so these reflect what
+    // has actually been resolved plus every runtime: key). Backs the MCP
+    // list_assets tool's runtime-asset inventory.
+    std::vector<std::string> meshKeys() const;
+    std::vector<std::string> textureKeys() const;
 
 private:
     std::unordered_map<std::string, Mesh> m_meshes;

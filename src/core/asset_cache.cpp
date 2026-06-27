@@ -173,4 +173,18 @@ const Texture* AssetCache::texture(const std::string& name) {
     return &it->second;
 }
 
+std::vector<std::string> AssetCache::meshKeys() const {
+    std::vector<std::string> keys;
+    keys.reserve(m_meshes.size());
+    for (const auto& [k, _] : m_meshes) keys.push_back(k);
+    return keys;
+}
+
+std::vector<std::string> AssetCache::textureKeys() const {
+    std::vector<std::string> keys;
+    keys.reserve(m_textures.size());
+    for (const auto& [k, _] : m_textures) keys.push_back(k);
+    return keys;
+}
+
 } // namespace liminal
