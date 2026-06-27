@@ -2,8 +2,8 @@
 // Relocatable resource resolution for the editor.
 //
 // The editor needs a handful of on-disk resources at runtime: the JetBrains
-// Mono + Noto Color Emoji TTFs, the canonical liminal-lua Claude skill, and the
-// bundled sample project. At configure time CMake bakes ABSOLUTE paths into
+// Mono + Noto Color Emoji TTFs and the canonical liminal-lua Claude skill. At
+// configure time CMake bakes ABSOLUTE paths into
 // these (LIMINAL_EDITOR_FONT_TTF etc.) pointing into the build tree / FetchContent
 // _deps — perfect for a developer running straight out of `build/`, useless once
 // the executable is copied to another machine.

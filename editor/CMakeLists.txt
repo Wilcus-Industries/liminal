@@ -73,27 +73,12 @@ if(TARGET lua_static)
     target_link_libraries(liminal-editor PRIVATE lua_static)
 endif()
 
-# Bakes the sample project location in so `./liminal-editor` with no args
-# opens something immediately. Overridable; only baked when the file actually
-# exists at configure time (stale absolute paths fall back to empty, and the
-# editor's runtime handling of an empty default path applies).
-set(LIMINAL_EDITOR_SAMPLE_PROJECT
-    "${CMAKE_CURRENT_SOURCE_DIR}/sample_project/project.ljson"
-    CACHE FILEPATH "Default project the editor opens when run with no args")
-if(EXISTS "${LIMINAL_EDITOR_SAMPLE_PROJECT}")
-    target_compile_definitions(liminal-editor PRIVATE
-        LIMINAL_EDITOR_SAMPLE_PROJECT="${LIMINAL_EDITOR_SAMPLE_PROJECT}")
-else()
-    target_compile_definitions(liminal-editor PRIVATE
-        LIMINAL_EDITOR_SAMPLE_PROJECT="")
-endif()
-
-# Bakes the path to the canonical liminal-lua Claude Code skill (lives in the
-# sample project). On project open the editor seeds this into the opened
+# Bakes the path to the canonical liminal-lua Claude Code skill (lives in
+# editor/skills/). On project open the editor seeds this into the opened
 # project's .claude/skills/ if absent, so Claude Code running in the editor's
 # terminal knows the `lm` Lua API. Empty when missing -> seeding is skipped.
 set(LIMINAL_EDITOR_LUA_SKILL
-    "${CMAKE_CURRENT_SOURCE_DIR}/sample_project/.claude/skills/liminal-lua/SKILL.md")
+    "${CMAKE_CURRENT_SOURCE_DIR}/skills/liminal-lua/SKILL.md")
 if(EXISTS "${LIMINAL_EDITOR_LUA_SKILL}")
     target_compile_definitions(liminal-editor PRIVATE
         LIMINAL_EDITOR_LUA_SKILL="${LIMINAL_EDITOR_LUA_SKILL}")
@@ -133,7 +118,6 @@ if(APPLE AND LIMINAL_BUILD_PLAYER)
             -DFONT_TTF=${LIMINAL_JETBRAINS_MONO_TTF}
             -DEMOJI_TTF=${LIMINAL_NOTO_EMOJI_TTF}
             -DSKILL_MD=${LIMINAL_EDITOR_LUA_SKILL}
-            -DSAMPLE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/sample_project
             -DICON_DIR=${CMAKE_SOURCE_DIR}/assets/icons/macos/${LIMINAL_MACOS_ICON_VARIANT}
             -DOUT_DIR=${CMAKE_BINARY_DIR}/dist
             -DVERSION=${PROJECT_VERSION}

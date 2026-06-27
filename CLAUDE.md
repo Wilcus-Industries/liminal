@@ -29,7 +29,7 @@ No install/export rules — liminal is no longer a `find_package` consumable; th
 
 ### Packaging (macOS)
 
-`cmake --build build --target package-mac` assembles a relocatable `build/dist/Liminal.app` (+ `Liminal-<version>-macOS.dmg`) from the already-built editor/player binaries — APPLE-only, gated on `LIMINAL_BUILD_PLAYER`, defined in `editor/CMakeLists.txt`, logic in `cmake/pack_macos.cmake`. The in-tree targets stay PLAIN executables (no `MACOSX_BUNDLE`) so dev `./liminal-editor` and the Build-Game player-lookup (player beside the editor) are undisturbed; packaging is an explicit opt-in step. Bundle layout: `Contents/MacOS/{liminal-editor, liminal-player}` (player rides along so the bundled editor's Build Game works — it looks for the player beside itself), `Contents/Resources/{JetBrainsMono.ttf, NotoColorEmoji.ttf, Liminal.icns, skills/liminal-lua/SKILL.md, sample_project/}`, `Contents/Info.plist`. The app icon is built at package time by `iconutil` from the per-size PNGs in `assets/icons/macos/<variant>/liminal-{16..1024}.png` (no upscaling — every `.iconset` slot maps to a real source size) into `Liminal.icns`, referenced via `CFBundleIconFile`; the variant is the `LIMINAL_MACOS_ICON_VARIANT` cache var (`light` default, or `dark` — both full-bleed rounded-square sets live in `assets/icons/macos/`). A single classic `.icns` is one fixed icon (appearance-aware light/dark icon variants would need Asset-Catalog/Icon-Composer tooling). The sample copy EXCLUDES `models/` (the gitignored multi-GB Llama GGUF — Meta license), `.DS_Store`, `.mcp.json`. Both binaries link only system libs (otool-verified) so no dylib fixup is needed. The script ad-hoc codesigns (`codesign --sign -`) so it runs locally; distribution to OTHER Macs still needs a Developer ID signature + notarization (Gatekeeper rejects ad-hoc), and the macOS-shipped-games caveat (exe + `.pak` sidecar) is unrelated. **Resource relocatability:** `editor/resource_paths.hpp` `resolveResource(bundleRelName, bakedAbs)` resolves each runtime resource (fonts, skill, sample) by preferring a copy beside the exe (`../Resources` for the `.app`, `./resources` for a portable dir) and falling back to the configure-time baked absolute path (`LIMINAL_EDITOR_FONT_TTF` etc.) for in-tree dev builds — so the same binary works both run-from-`build/` and packaged. Windows is NOT yet packaged (no cross-toolchain on macOS; needs a Windows machine or CI, and the Terminal panel's `Pty` is a Windows stub).
+`cmake --build build --target package-mac` assembles a relocatable `build/dist/Liminal.app` (+ `Liminal-<version>-macOS.dmg`) from the already-built editor/player binaries — APPLE-only, gated on `LIMINAL_BUILD_PLAYER`, defined in `editor/CMakeLists.txt`, logic in `cmake/pack_macos.cmake`. The in-tree targets stay PLAIN executables (no `MACOSX_BUNDLE`) so dev `./liminal-editor` and the Build-Game player-lookup (player beside the editor) are undisturbed; packaging is an explicit opt-in step. Bundle layout: `Contents/MacOS/{liminal-editor, liminal-player}` (player rides along so the bundled editor's Build Game works — it looks for the player beside itself), `Contents/Resources/{JetBrainsMono.ttf, NotoColorEmoji.ttf, Liminal.icns, skills/liminal-lua/SKILL.md}`, `Contents/Info.plist`. The app icon is built at package time by `iconutil` from the per-size PNGs in `assets/icons/macos/<variant>/liminal-{16..1024}.png` (no upscaling — every `.iconset` slot maps to a real source size) into `Liminal.icns`, referenced via `CFBundleIconFile`; the variant is the `LIMINAL_MACOS_ICON_VARIANT` cache var (`light` default, or `dark` — both full-bleed rounded-square sets live in `assets/icons/macos/`). A single classic `.icns` is one fixed icon (appearance-aware light/dark icon variants would need Asset-Catalog/Icon-Composer tooling). Both binaries link only system libs (otool-verified) so no dylib fixup is needed. The script ad-hoc codesigns (`codesign --sign -`) so it runs locally; distribution to OTHER Macs still needs a Developer ID signature + notarization (Gatekeeper rejects ad-hoc), and the macOS-shipped-games caveat (exe + `.pak` sidecar) is unrelated. **Resource relocatability:** `editor/resource_paths.hpp` `resolveResource(bundleRelName, bakedAbs)` resolves each runtime resource (fonts, skill) by preferring a copy beside the exe (`../Resources` for the `.app`, `./resources` for a portable dir) and falling back to the configure-time baked absolute path (`LIMINAL_EDITOR_FONT_TTF` etc.) for in-tree dev builds — so the same binary works both run-from-`build/` and packaged. Windows is NOT yet packaged (no cross-toolchain on macOS; needs a Windows machine or CI, and the Terminal panel's `Pty` is a Windows stub).
 
 First-party translation units compile with `-Wall -Wextra` (the `LIMINAL_WARNING_FLAGS` var, applied target-wide to the lib/player/tests and source-scoped to the editor's own `.cpp` files so the in-tree vendored sources — ImGui, ImGuizmo, ImGuiColorTextEdit, libvterm, stb, miniaudio, glad — stay unwarned). The build also adds `-Wl,-no_warn_duplicate_libraries` when `CheckLinkerFlag` confirms support (silences the harmless duplicate-`libglfw3.a` warning from newer macOS ld).
 
@@ -314,8 +314,7 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              liminal::userConfigDir()/recent_projects.json (newest-first, deduped
              by canonical path, capped 15). openProject records the project +
              flips m_screen to Editor. CLI: no args = landing, --project <p> opens
-             straight into the editor, --empty = blank editor scene, --sample =
-             the bundled sample project.
+             straight into the editor, --empty = blank editor scene.
              File > Close Project (closeProject, enabled only with a project
              open) tears the project down — resets m_mcp, re-seeds the default
              panel set (seedDefaultPanels: all instances dropped, terminals
@@ -536,10 +535,10 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              auto-discovers it; write failure is logged + non-fatal).
              On project open the editor also seeds the liminal-lua Claude Code
              skill (seedLuaSkill): copies the canonical
-             sample_project/.claude/skills/liminal-lua/SKILL.md (baked path
+             editor/skills/liminal-lua/SKILL.md (baked path
              LIMINAL_EDITOR_LUA_SKILL) into `<projectDir>/.claude/skills/
              liminal-lua/SKILL.md` if absent — never clobbers a customized one,
-             skips when dest == source (the sample itself), logged + non-fatal.
+             skips when dest == source, logged + non-fatal.
              The skill is agent-first: it leads with a "Driving liminal as an
              agent (MCP)" section (the division of labor — MCP = live editor state,
              the agent's own file tools = .lua/.lscene on disk; the build loop;
@@ -608,7 +607,8 @@ tests/       test_scene_roundtrip (JSON byte-stability of all components),
              raycastScene Collider-AABB hit/miss + mass create/destroy via a
              Script — the lm.scene.each collect-then-destroy UAF regression),
              test_pak_roundtrip,
-             test_build_pak
+             test_build_pak (buildGamePak end-to-end over a temp project the
+             test synthesizes on disk — no checked-in fixture)
 assets/shaders/  native/ (scene.vert + scene.frag — the default crisp pack) and
              retro/ (dream.vert/.frag scene pass + blit.vert/.frag upscale, the PS1
              look). The blit pair is shared by both packs. All baked into the lib via
@@ -627,7 +627,7 @@ cmake/
 
 ## Known issues / accepted limitations
 
-All bugs and notable risks from the 2026-06-12 review were fixed on 2026-06-12 (editor picking via gizmo-freshness gate + ray-vs-AABB, Entity/Lua null guards, CMake C++ standard save/restore around llama fetch, `LIMINAL_EDITOR_SAMPLE_PROJECT` cache var, renderer ctor exception safety, stbi RAII guard, console ListClipper + 1000-line cap).
+All bugs and notable risks from the 2026-06-12 review were fixed on 2026-06-12 (editor picking via gizmo-freshness gate + ray-vs-AABB, Entity/Lua null guards, CMake C++ standard save/restore around llama fetch, renderer ctor exception safety, stbi RAII guard, console ListClipper + 1000-line cap).
 
 2026-06-15: fixed an editor SIGSEGV (UAF) when a Lua script stored entities from `lm.scene.each` / `lm.scene.find_all` and used them after the callback (the "collect-then-destroy" pattern, e.g. a `clear_world()` mass-destroy). Both binders passed/stored the C++ `Entity` **lvalue**, so sol2 handed Lua a *reference* to a reused stack local; after the call the slot held garbage, and `entity:destroy()` dereferenced a non-null garbage `Scene*` in `Entity::valid()`. Fix: push Lua-OWNED copies — `each` calls `fn(Entity(h, sc))` (rvalue), `find_all` stores `sol::make_object(sv, e)` (`src/script/lua_bindings.cpp`). Invariant: when handing a C++ value-handle (`Entity`) to Lua, always pass an rvalue or `make_object` so Lua owns the copy; never the lvalue (which binds by reference). Covered by `tests/test_lua_api.cpp` `testMassDestroy` (build N entities → `each`-collect → `:destroy()` → rebuild; asserts none survive). Note the *separate*, still-current hazard below: raw component pointers from `get_*`/`get_component` stay frame-local. Remaining accepted limitations:
 
