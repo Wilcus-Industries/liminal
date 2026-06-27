@@ -2241,6 +2241,257 @@ void EditorApp::startMcpServer() {
         return {{"ok", true}, {"path", target}};
     };
 
+    provider.duplicateEntity = [this](const std::string& idOrName) -> nlohmann::json {
+        registerBuiltinComponents();
+        const entt::entity e = resolveEntity(idOrName);
+        if (e == entt::null) return {{"error", "entity not found"}};
+        m_history.pushSnapshot(m_scene);
+        Entity dup = duplicateEntity(e);
+        std::string name;
+        if (const auto* n = m_scene.registry().try_get<Name>(dup.handle()))
+            name = n->value;
+        return {{"ok", true},
+                {"id", (int)entt::to_integral(dup.handle())},
+                {"name", name}};
+    };
+
+    // --- discovery / introspection -------------------------------------------
+    provider.listComponents = []() -> nlohmann::json {
+        registerBuiltinComponents();
+        // Infer a friendly type tag from a default JSON value.
+        auto typeOf = [](const nlohmann::json& v) -> std::string {
+            if (v.is_boolean()) return "bool";
+            if (v.is_number()) return "number";
+            if (v.is_string()) return "string";
+            if (v.is_array())
+                return v.size() == 3   ? "vec3"
+                       : v.size() == 4 ? "vec4"
+                                       : "array";
+            if (v.is_object()) return "object";
+            return "any";
+        };
+        // Default-construct each component on a scratch registry and read its
+        // serialized form to discover field names + defaults (no per-component
+        // schema authoring needed).
+        entt::registry scratch;
+        const entt::entity e = scratch.create();
+        nlohmann::json comps = nlohmann::json::array();
+        for (const auto& op : ComponentRegistry::instance().all()) {
+            op.fromJson(scratch, e, nlohmann::json::object());
+            const nlohmann::json def = op.toJson(scratch, e);
+            nlohmann::json fields = nlohmann::json::object();
+            if (def.is_object())
+                for (auto it = def.begin(); it != def.end(); ++it)
+                    fields[it.key()] = {{"type", typeOf(it.value())},
+                                        {"default", it.value()}};
+            comps.push_back({{"name", op.name}, {"fields", fields}});
+            op.removeFrom(scratch, e);
+        }
+        return {{"components", comps}};
+    };
+
+    provider.listAssets = [this]() -> nlohmann::json {
+        // Builtin catalog mirrors include/liminal/core/asset_cache.hpp.
+        nlohmann::json builtinMeshes = {
+            "builtin:box",   "builtin:pyramid", "builtin:pillar",
+            "builtin:arch",  "builtin:stair",   "builtin:plane",
+            "builtin:quad",  "builtin:blob:<seed>", "builtin:tree:<seed>",
+            "builtin:rock:<seed>", "builtin:crystal:<seed>",
+            "builtin:form:<sides>,<twist>,<taper>[,<seed>]"};
+        nlohmann::json builtinTextures = {
+            "builtin:white",  "builtin:checker", "builtin:grid",
+            "builtin:noise",  "builtin:concrete","builtin:wood",
+            "builtin:metal",  "builtin:brick",   "builtin:plaster",
+            "builtin:grass",  "builtin:dirt",    "builtin:water"};
+        // Texture files on disk under the project (valid textureAsset values).
+        nlohmann::json projectTextures = nlohmann::json::array();
+        if (!m_projectFile.empty()) {
+            const fs::path base = fs::path(m_projectFile).parent_path();
+            static const std::vector<std::string> exts = {
+                ".png", ".jpg", ".jpeg", ".tga", ".bmp"};
+            std::error_code ec;
+            for (auto it = fs::recursive_directory_iterator(
+                     base, fs::directory_options::skip_permission_denied, ec);
+                 it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (ec) break;
+                if (!it->is_regular_file(ec)) continue;
+                std::string ext = it->path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+                if (std::find(exts.begin(), exts.end(), ext) != exts.end())
+                    projectTextures.push_back(
+                        fs::relative(it->path(), base, ec).generic_string());
+            }
+            std::sort(projectTextures.begin(), projectTextures.end());
+        }
+        // Live runtime: keys (registered via lm.assets.add_*).
+        nlohmann::json runtimeMeshes = nlohmann::json::array();
+        for (const auto& k : m_assets.meshKeys())
+            if (k.rfind("runtime:", 0) == 0) runtimeMeshes.push_back(k);
+        nlohmann::json runtimeTextures = nlohmann::json::array();
+        for (const auto& k : m_assets.textureKeys())
+            if (k.rfind("runtime:", 0) == 0) runtimeTextures.push_back(k);
+        return {{"builtin_meshes", builtinMeshes},
+                {"builtin_textures", builtinTextures},
+                {"project_textures", projectTextures},
+                {"runtime_meshes", runtimeMeshes},
+                {"runtime_textures", runtimeTextures},
+                {"shader_packs", shaderCatalog()}};
+    };
+
+    provider.listShaders = [this]() -> nlohmann::json {
+        nlohmann::json packs = nlohmann::json::array();
+        for (const auto& s : shaderCatalog()) packs.push_back(s);
+        nlohmann::json cams = nlohmann::json::array();
+        auto& reg = m_scene.registry();
+        for (auto e : reg.view<Camera>()) {
+            const auto& cam = reg.get<Camera>(e);
+            std::string name;
+            if (const auto* n = reg.try_get<Name>(e)) name = n->value;
+            cams.push_back({{"id", (int)entt::to_integral(e)},
+                            {"name", name},
+                            {"shader", cam.shaderName},
+                            {"primary", cam.primary}});
+        }
+        return {{"packs", packs}, {"cameras", cams}};
+    };
+
+    // --- human-in-loop feedback ----------------------------------------------
+    provider.selectEntity = [this](const std::string& idOrName) -> nlohmann::json {
+        const entt::entity e = resolveEntity(idOrName);
+        if (e == entt::null) return {{"error", "entity not found"}};
+        m_selected = e;
+        std::string name;
+        if (const auto* n = m_scene.registry().try_get<Name>(e)) name = n->value;
+        return {{"ok", true}, {"id", (int)entt::to_integral(e)}, {"name", name}};
+    };
+
+    provider.getSelection = [this]() -> nlohmann::json {
+        if (m_selected == entt::null || !m_scene.registry().valid(m_selected))
+            return nullptr;
+        std::string name;
+        if (const auto* n = m_scene.registry().try_get<Name>(m_selected))
+            name = n->value;
+        return {{"id", (int)entt::to_integral(m_selected)}, {"name", name}};
+    };
+
+    provider.focusEntity = [this](const std::string& idOrName) -> nlohmann::json {
+        const entt::entity e = resolveEntity(idOrName);
+        if (e == entt::null) return {{"error", "entity not found"}};
+        const auto* t = m_scene.registry().try_get<Transform>(e);
+        if (!t) return {{"error", "entity has no Transform"}};
+        // Back the camera off along a fixed diagonal and aim it at the target.
+        const float dist =
+            6.0f * std::max({t->scale.x, t->scale.y, t->scale.z, 1.0f});
+        const glm::vec3 offset = glm::normalize(glm::vec3(0.6f, 0.5f, 1.0f)) * dist;
+        m_camPos = t->position + offset;
+        const glm::vec3 look = glm::normalize(t->position - m_camPos);
+        m_camPitch = glm::degrees(std::asin(std::clamp(look.y, -1.0f, 1.0f)));
+        m_camYaw = glm::degrees(std::atan2(look.x, look.z));
+        m_selected = e;
+        return {{"ok", true}, {"id", (int)entt::to_integral(e)}};
+    };
+
+    // --- scene I/O -----------------------------------------------------------
+    provider.openScene = [this](const std::string& path) -> nlohmann::json {
+        if (path.empty()) return {{"error", "no path"}};
+        openScene(path); // resolves via Assets; auto-stops Play
+        return {{"ok", true}, {"scenePath", m_scenePath}};
+    };
+
+    provider.newScene = [this]() -> nlohmann::json {
+        newScene();
+        return {{"ok", true}};
+    };
+
+    // --- verify / query + build ----------------------------------------------
+    provider.raycast = [this](const nlohmann::json& origin,
+                              const nlohmann::json& dir,
+                              double maxDist) -> nlohmann::json {
+        if (!origin.is_array() || origin.size() != 3 || !dir.is_array() ||
+            dir.size() != 3)
+            return {{"error", "origin/dir must be [x,y,z]"}};
+        const glm::vec3 o(origin[0].get<float>(), origin[1].get<float>(),
+                          origin[2].get<float>());
+        const glm::vec3 d(dir[0].get<float>(), dir[1].get<float>(),
+                          dir[2].get<float>());
+        auto hit = raycastScene(m_scene, m_assets, o, d, (float)maxDist);
+        if (!hit) return nullptr;
+        std::string name;
+        if (const auto* n = m_scene.registry().try_get<Name>(hit->entity))
+            name = n->value;
+        return {{"entity", (int)entt::to_integral(hit->entity)},
+                {"name", name},
+                {"point", {hit->point.x, hit->point.y, hit->point.z}},
+                {"normal", {hit->normal.x, hit->normal.y, hit->normal.z}},
+                {"distance", hit->distance}};
+    };
+
+    provider.validateScene = [this]() -> nlohmann::json {
+        nlohmann::json issues = nlohmann::json::array();
+        auto& reg = m_scene.registry();
+        const fs::path base =
+            m_projectFile.empty() ? fs::path{}
+                                  : fs::path(m_projectFile).parent_path();
+        int primaryCameras = 0;
+        auto addIssue = [&](entt::entity e, const char* sev,
+                            const std::string& msg) {
+            std::string name;
+            if (const auto* n = reg.try_get<Name>(e)) name = n->value;
+            issues.push_back({{"entity", (int)entt::to_integral(e)},
+                              {"name", name},
+                              {"severity", sev},
+                              {"message", msg}});
+        };
+        for (auto e : reg.view<entt::entity>()) {
+            if (const auto* mr = reg.try_get<MeshRenderer>(e)) {
+                if (!mr->meshAsset.empty() && !m_assets.mesh(mr->meshAsset))
+                    addIssue(e, "error",
+                             "meshAsset does not resolve: " + mr->meshAsset);
+                if (!mr->textureAsset.empty() &&
+                    !m_assets.texture(mr->textureAsset))
+                    addIssue(e, "error",
+                             "textureAsset does not resolve: " + mr->textureAsset);
+            }
+            if (const auto* sc = reg.try_get<Script>(e)) {
+                for (const auto& p : sc->paths) {
+                    std::error_code ec;
+                    if (base.empty() || !fs::exists(base / p, ec))
+                        addIssue(e, "error", "script file missing: " + p);
+                }
+            }
+            if (const auto* cam = reg.try_get<Camera>(e))
+                if (cam->primary) ++primaryCameras;
+        }
+        if (primaryCameras == 0)
+            issues.push_back({{"severity", "warning"},
+                              {"message", "no primary Camera in the scene"}});
+        else if (primaryCameras > 1)
+            issues.push_back(
+                {{"severity", "warning"},
+                 {"message", "more than one primary Camera (" +
+                                 std::to_string(primaryCameras) + ")"}});
+        return {{"ok", issues.empty()},
+                {"issues", issues},
+                {"primaryCameraCount", primaryCameras}};
+    };
+
+    provider.buildGame = [this](const std::string& outPath) -> nlohmann::json {
+        if (m_projectFile.empty()) return {{"error", "no project open"}};
+        std::string target = outPath;
+        if (target.empty()) {
+            const fs::path base = fs::path(m_projectFile).parent_path();
+            std::string stem = m_projectTitle.empty() ? "game" : m_projectTitle;
+#if defined(_WIN32)
+            target = (base / "build" / (stem + ".exe")).string();
+#else
+            target = (base / "build" / stem).string();
+#endif
+        }
+        buildGame(target); // synchronous; logs progress/result to the console
+        return {{"ok", true}, {"outPath", target}};
+    };
+
     m_mcp = std::make_unique<McpServer>(std::move(provider));
     m_mcp->setLogSink([this](const std::string& line) { log(line); });
     const int port = m_mcp->start(7717);

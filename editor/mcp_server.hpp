@@ -85,6 +85,50 @@ struct McpProvider {
     std::function<nlohmann::json(const std::string& name)> createEntity;
     // Destroy the entity (entt id or Name). { "ok": true, "id" } / error.
     std::function<nlohmann::json(const std::string& idOrName)> destroyEntity;
+    // Duplicate the entity (entt id or Name). { "ok": true, "id", "name" } / error.
+    std::function<nlohmann::json(const std::string& idOrName)> duplicateEntity;
+
+    // --- discovery / introspection -------------------------------------------
+    // Every registered component with its field names, inferred types, and
+    // default values: { "components": [ { "name", "fields":{...} } ] }.
+    std::function<nlohmann::json()> listComponents;
+    // Asset inventory: builtin meshes/textures, project texture files, shader
+    // packs, and live runtime: keys. { "builtin_meshes":[...], ... }.
+    std::function<nlohmann::json()> listAssets;
+    // Available shader packs + each Camera's current pick:
+    // { "packs":[...], "cameras":[ { "id","name","shader" } ] }.
+    std::function<nlohmann::json()> listShaders;
+
+    // --- human-in-loop feedback ----------------------------------------------
+    // Select the entity in the editor (Inspector + viewport highlight).
+    // { "ok": true, "id", "name" } / error.
+    std::function<nlohmann::json(const std::string& idOrName)> selectEntity;
+    // The current editor selection: { "id", "name" } or null.
+    std::function<nlohmann::json()> getSelection;
+    // Point the editor camera at the entity for a screenshot. { "ok": true } / err.
+    std::function<nlohmann::json(const std::string& idOrName)> focusEntity;
+
+    // --- scene I/O -----------------------------------------------------------
+    // Open a different scene file (resolved via Assets; auto-stops Play).
+    // { "ok": true, "scenePath" } / error.
+    std::function<nlohmann::json(const std::string& path)> openScene;
+    // Replace the current scene with a fresh blank one. { "ok": true }.
+    std::function<nlohmann::json()> newScene;
+
+    // --- verify / query + build ----------------------------------------------
+    // Ray-vs-scene query over Collider/mesh AABBs. origin/dir are [x,y,z]
+    // arrays, maxDist<=0 = unbounded. { "entity","point","normal","distance" }
+    // or null.
+    std::function<nlohmann::json(const nlohmann::json& origin,
+                                 const nlohmann::json& dir, double maxDist)>
+        raycast;
+    // Check asset/script references resolve + exactly one primary Camera.
+    // { "ok": bool, "issues":[...], "primaryCameraCount": n }.
+    std::function<nlohmann::json()> validateScene;
+    // Build the standalone game; empty path → a default under the project dir.
+    // Synchronous + may exceed the response window — poll console_log for the
+    // result. { "ok": true, "outPath" } / error.
+    std::function<nlohmann::json(const std::string& outPath)> buildGame;
 };
 
 // PNG-encode RGBA8 pixels (bottom-up, w*h*4 bytes) and return the result

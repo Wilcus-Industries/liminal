@@ -221,6 +221,105 @@ nlohmann::json toolSchemas() {
           obj({{"id", {{"type", "string"},
                        {"description", "entt id or entity Name"}}}},
               {"id"})}},
+        {{"name", "duplicate_entity"},
+         {"description",
+          "Duplicate an entity (entt id or Name), copying all of its "
+          "components. Mutation is live/in-memory; call save_scene to persist."},
+         {"inputSchema",
+          obj({{"id", {{"type", "string"},
+                       {"description", "entt id or entity Name to duplicate"}}}},
+              {"id"})}},
+        // --- discovery / introspection --------------------------------------
+        {{"name", "list_components"},
+         {"description",
+          "List every component type the engine can serialize, with each "
+          "component's field names, inferred types, and default values. Use "
+          "this before set_component so the data payload uses the exact JSON "
+          "field names (e.g. MeshRenderer.meshAsset, Transform.rotationEuler)."},
+         {"inputSchema", none}},
+        {{"name", "list_assets"},
+         {"description",
+          "Inventory of usable assets: builtin mesh names (builtin:box, ...), "
+          "builtin texture names, texture files found under the project, "
+          "registered shader packs, and live runtime: keys. Mesh/texture names "
+          "here are valid values for MeshRenderer.meshAsset / textureAsset."},
+         {"inputSchema", none}},
+        {{"name", "list_scenes"},
+         {"description",
+          "Enumerate all *.lscene files under the project directory (relative "
+          "paths). Use a path here with open_scene."},
+         {"inputSchema", none}},
+        {{"name", "list_shaders"},
+         {"description",
+          "List the available shader packs and each Camera's current shader "
+          "pick. A pack name here is a valid value for Camera.shaderName."},
+         {"inputSchema", none}},
+        // --- scene management -----------------------------------------------
+        {{"name", "open_scene"},
+         {"description",
+          "Open a different scene file (resolved via the project's asset "
+          "search paths; auto-stops Play and discards live edits)."},
+         {"inputSchema",
+          obj({{"path", {{"type", "string"},
+                         {"description", "scene path, e.g. scenes/main.lscene"}}}},
+              {"path"})}},
+        {{"name", "new_scene"},
+         {"description",
+          "Replace the current scene with a fresh blank one (not yet saved). "
+          "Use save_scene with a path to persist it."},
+         {"inputSchema", none}},
+        // --- human-in-loop feedback -----------------------------------------
+        {{"name", "select_entity"},
+         {"description",
+          "Select an entity (entt id or Name) in the editor so the human sees "
+          "it highlighted in the Inspector and viewport."},
+         {"inputSchema",
+          obj({{"id", {{"type", "string"},
+                       {"description", "entt id or entity Name"}}}},
+              {"id"})}},
+        {{"name", "get_selection"},
+         {"description", "The entity currently selected in the editor, or null."},
+         {"inputSchema", none}},
+        {{"name", "focus_entity"},
+         {"description",
+          "Point the editor camera at an entity (entt id or Name). Pair with "
+          "screenshot to see your work. Edit mode only."},
+         {"inputSchema",
+          obj({{"id", {{"type", "string"},
+                       {"description", "entt id or entity Name"}}}},
+              {"id"})}},
+        // --- verify / query + build -----------------------------------------
+        {{"name", "raycast"},
+         {"description",
+          "Cast a ray against the scene's Collider/mesh AABBs. Returns the "
+          "nearest hit { entity, point, normal, distance } or null."},
+         {"inputSchema",
+          obj({{"origin", {{"type", "array"},
+                           {"description", "[x,y,z] ray origin"}}},
+               {"dir", {{"type", "array"},
+                        {"description", "[x,y,z] ray direction"}}},
+               {"maxDist", {{"type", "number"},
+                            {"description",
+                             "max distance (<=0 = unbounded, default 0)"}}}},
+              {"origin", "dir"})}},
+        {{"name", "validate_scene"},
+         {"description",
+          "Check the current scene for problems: unresolved MeshRenderer "
+          "meshAsset/textureAsset, missing Script files, and a primary-camera "
+          "count other than one. Returns { ok, issues, primaryCameraCount }."},
+         {"inputSchema", none}},
+        {{"name", "build_game"},
+         {"description",
+          "Build the standalone game (packs a .pak + a player executable). "
+          "With no path, builds to a default location under the project dir. "
+          "The build is synchronous and may exceed the response window — if so "
+          "you get a timeout; poll console_log for the build result."},
+         {"inputSchema",
+          obj({{"path", {{"type", "string"},
+                         {"description",
+                          "output executable path (default: under the project "
+                          "dir)"}}}},
+              {})}},
     });
 }
 
@@ -627,6 +726,159 @@ nlohmann::json McpServer::callTool(const std::string& name,
             return m_provider.destroyEntity
                        ? m_provider.destroyEntity(id)
                        : nlohmann::json{{"error", "destroyEntity unavailable"}};
+        });
+    }
+
+    if (name == "duplicate_entity") {
+        const std::string id = args.value("id", std::string{});
+        if (id.empty())
+            return textResult("{\"error\":\"duplicate_entity requires 'id'\"}");
+        return marshalText([this, id]() -> nlohmann::json {
+            return m_provider.duplicateEntity
+                       ? m_provider.duplicateEntity(id)
+                       : nlohmann::json{{"error", "duplicateEntity unavailable"}};
+        });
+    }
+
+    if (name == "list_components") {
+        return marshalText(
+            [this]() -> nlohmann::json {
+                return m_provider.listComponents
+                           ? m_provider.listComponents()
+                           : nlohmann::json{{"components", nlohmann::json::array()}};
+            },
+            2);
+    }
+
+    if (name == "list_assets") {
+        return marshalText(
+            [this]() -> nlohmann::json {
+                return m_provider.listAssets ? m_provider.listAssets()
+                                             : nlohmann::json::object();
+            },
+            2);
+    }
+
+    if (name == "list_scenes") {
+        // Filesystem-only walk, same shape as list_scripts: pull the root on the
+        // main thread, then scan here for *.lscene.
+        std::string root = marshal(
+                               [this]() -> nlohmann::json {
+                                   return m_provider.projectDir
+                                              ? m_provider.projectDir()
+                                              : std::string{};
+                               },
+                               nlohmann::json(std::string{}))
+                               .get<std::string>();
+        if (root.empty())
+            return textResult("{\"error\":\"no project open\"}");
+        nlohmann::json scenes = nlohmann::json::array();
+        std::error_code ec;
+        const fs::path base = fs::path(root);
+        for (auto it = fs::recursive_directory_iterator(
+                 base, fs::directory_options::skip_permission_denied, ec);
+             it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            if (ec) break;
+            if (!it->is_regular_file(ec)) continue;
+            if (it->path().extension() == ".lscene")
+                scenes.push_back(
+                    fs::relative(it->path(), base, ec).generic_string());
+        }
+        std::sort(scenes.begin(), scenes.end());
+        return textResult(scenes.dump(2));
+    }
+
+    if (name == "list_shaders") {
+        return marshalText(
+            [this]() -> nlohmann::json {
+                return m_provider.listShaders ? m_provider.listShaders()
+                                              : nlohmann::json::object();
+            },
+            2);
+    }
+
+    if (name == "open_scene") {
+        const std::string path = args.value("path", std::string{});
+        if (path.empty())
+            return textResult("{\"error\":\"open_scene requires 'path'\"}");
+        return marshalText([this, path]() -> nlohmann::json {
+            return m_provider.openScene
+                       ? m_provider.openScene(path)
+                       : nlohmann::json{{"error", "openScene unavailable"}};
+        });
+    }
+
+    if (name == "new_scene") {
+        return marshalText([this]() -> nlohmann::json {
+            return m_provider.newScene
+                       ? m_provider.newScene()
+                       : nlohmann::json{{"error", "newScene unavailable"}};
+        });
+    }
+
+    if (name == "select_entity") {
+        const std::string id = args.value("id", std::string{});
+        if (id.empty())
+            return textResult("{\"error\":\"select_entity requires 'id'\"}");
+        return marshalText([this, id]() -> nlohmann::json {
+            return m_provider.selectEntity
+                       ? m_provider.selectEntity(id)
+                       : nlohmann::json{{"error", "selectEntity unavailable"}};
+        });
+    }
+
+    if (name == "get_selection") {
+        return marshalText(
+            [this]() -> nlohmann::json {
+                return m_provider.getSelection ? m_provider.getSelection()
+                                               : nlohmann::json(nullptr);
+            },
+            2);
+    }
+
+    if (name == "focus_entity") {
+        const std::string id = args.value("id", std::string{});
+        if (id.empty())
+            return textResult("{\"error\":\"focus_entity requires 'id'\"}");
+        return marshalText([this, id]() -> nlohmann::json {
+            return m_provider.focusEntity
+                       ? m_provider.focusEntity(id)
+                       : nlohmann::json{{"error", "focusEntity unavailable"}};
+        });
+    }
+
+    if (name == "raycast") {
+        const nlohmann::json origin = args.value("origin", nlohmann::json::array());
+        const nlohmann::json dir = args.value("dir", nlohmann::json::array());
+        const double maxDist = args.value("maxDist", 0.0);
+        if (!origin.is_array() || origin.size() != 3 || !dir.is_array() ||
+            dir.size() != 3)
+            return textResult(
+                "{\"error\":\"raycast requires 'origin' and 'dir' as [x,y,z]\"}");
+        return marshalText(
+            [this, origin, dir, maxDist]() -> nlohmann::json {
+                return m_provider.raycast
+                           ? m_provider.raycast(origin, dir, maxDist)
+                           : nlohmann::json(nullptr);
+            },
+            2);
+    }
+
+    if (name == "validate_scene") {
+        return marshalText(
+            [this]() -> nlohmann::json {
+                return m_provider.validateScene ? m_provider.validateScene()
+                                                : nlohmann::json::object();
+            },
+            2);
+    }
+
+    if (name == "build_game") {
+        const std::string path = args.value("path", std::string{});
+        return marshalText([this, path]() -> nlohmann::json {
+            return m_provider.buildGame
+                       ? m_provider.buildGame(path)
+                       : nlohmann::json{{"error", "buildGame unavailable"}};
         });
     }
 

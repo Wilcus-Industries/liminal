@@ -46,7 +46,9 @@ src/
              (name → GPU resource, "builtin:"-prefixed procedural meshes/textures,
              warn-once failures; addMesh returns the stored "runtime:" key;
              addTexture(name,Texture) likewise returns a "runtime:" key (backs
-             lm.assets.add_texture). builtin: mesh names include the parametric
+             lm.assets.add_texture). meshKeys()/textureKeys() enumerate the
+             currently-loaded keys (back the MCP list_assets runtime inventory).
+             builtin: mesh names include the parametric
              "builtin:form:<sides>,<twist>,<taper>[,<seed>]" (→ Mesh::form)),
              pak (LMPK\0v01-footer archive: buildGamePak helper packs project files
              + synthesizes project.ljson carrying width/height through from the
@@ -469,28 +471,61 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              stb_image_write, row-flipped to top-down, 1 frame stale since pump()
              runs before the frame renders; returns a text error block
              "no framebuffer" if no FBO).
-             Control tools (via McpProvider control/reloadScene/saveScene getters):
-             play_game (no input → startPlay, returns {mode,paused}), pause_game
-             (input {paused?:boolean} default true → pause/resume, errors if not
-             playing), stop_game (no input → stopPlay), reload_scene (no input →
-             openScene(m_scenePath); discards live in-memory edits and auto-stops
-             Play, reloading from disk), save_scene (input {path?:string}, empty →
-             current m_scenePath → m_scene.save).
+             Discovery/introspection tools (no scene mutation): list_components
+             (no input → {components:[{name,fields:{<f>:{type,default}}}]};
+             built by default-constructing each ComponentRegistry::all() entry on
+             a scratch entt::registry via fromJson({}) then reading toJson, with a
+             type tag inferred from the default JSON value shape — so set_component
+             payloads use the exact serialized field names, not guesses),
+             list_assets (no input → {builtin_meshes, builtin_textures (the
+             asset_cache.hpp catalog), project_textures (png/jpg/jpeg/tga/bmp walk
+             of the project dir), runtime_meshes/runtime_textures (AssetCache::
+             meshKeys()/textureKeys() filtered to runtime: keys), shader_packs
+             (shaderCatalog())}), list_scenes (no input → *.lscene under the
+             project dir, relative — mirrors list_scripts), list_shaders (no input
+             → {packs: shaderCatalog(), cameras:[{id,name,shader,primary}]}).
+             Control tools (via McpProvider control/reloadScene/saveScene/openScene/
+             newScene getters): play_game (no input → startPlay, returns
+             {mode,paused}), pause_game (input {paused?:boolean} default true →
+             pause/resume, errors if not playing), stop_game (no input → stopPlay),
+             reload_scene (no input → openScene(m_scenePath); discards live
+             in-memory edits and auto-stops Play, reloading from disk), save_scene
+             (input {path?:string}, empty → current m_scenePath → m_scene.save),
+             open_scene (input {path} → openScene(path); resolves via Assets,
+             auto-stops Play), new_scene (no input → newScene()), build_game (input
+             {path?:string}, empty → <projectDir>/build/<title> → buildGame();
+             synchronous on the main thread, a large build may exceed the 5s
+             marshal window so the caller gets a timeout while the build still
+             completes — poll console_log). Feedback tools: select_entity (input
+             {id} → set m_selected, returns {ok,id,name}), get_selection (no input →
+             {id,name} or null), focus_entity (input {id} → point the editor camera
+             at the entity's Transform: m_camPos = pos + a back-off diagonal, then
+             m_camYaw/m_camPitch via atan2/asin of the look vector — pairs with
+             screenshot; edit mode). Query tool: raycast (input {origin:[x,y,z],
+             dir:[x,y,z], maxDist?} → wraps raycastScene(m_scene, m_assets, ...) →
+             {entity,name,point,normal,distance} or null). validate_scene (no input
+             → {ok, issues:[{entity,name,severity,message}], primaryCameraCount};
+             checks every MeshRenderer.meshAsset/textureAsset resolves via
+             m_assets.mesh()/texture(), every Script.paths[] file exists under the
+             project dir, and the primary-Camera count is exactly one).
              Mutation tools (via McpProvider setComponent/removeComponent/
-             createEntity/destroyEntity getters, all main-thread via marshal;
-             entity resolution shared with get_entity through
+             createEntity/destroyEntity/duplicateEntity getters, all main-thread
+             via marshal; entity resolution shared with get_entity through
              EditorApp::resolveEntity(idOrName) — entt id string or Name →
-             entt::null): set_component (input {id,component,data?:object} →
-             ComponentRegistry::find(component)->fromJson emplace_or_replace;
-             on "Transform" edits the transform, on "Script" data sets the
-             entity's {"paths":[...]} list of Lua scripts — multi-script),
-             remove_component (input {id,component} → ops->removeFrom),
+             entt::null; all push an undo snapshot first): set_component (input
+             {id,component,data?:object} → ComponentRegistry::find(component)->
+             fromJson emplace_or_replace; on "Transform" edits the transform, on
+             "Script" data sets the entity's {"paths":[...]} list of Lua scripts —
+             multi-script), remove_component (input {id,component} → ops->removeFrom),
              create_entity (input {name?:string} → m_scene.create(name); Name
              added when non-empty), destroy_entity (input {id} →
-             m_scene.destroy; clears m_selected if it was the target). All
-             mutations are live/in-memory — persist with save_scene (no
-             auto-save). Errors: "entity not found" / "unknown component: X" /
-             missing-required-arg as a text error block.
+             m_scene.destroy; clears m_selected if it was the target),
+             duplicate_entity (input {id} → duplicateEntity(src); copies all
+             components, returns {ok,id,name}). All mutations are live/in-memory —
+             persist with save_scene (no auto-save). Errors: "entity not found" /
+             "unknown component: X" / missing-required-arg as a text error block.
+             ~30 tools total (mcp_server.cpp toolSchemas() + callTool() if-chain,
+             one McpProvider getter each wired in startMcpServer()).
              Port: tries 7717 then up to 15 more,
              reports the bound port; 0 = none bound (non-fatal). Started on first
              project open (startMcpServer); each tool reports CURRENT m_scene (a
@@ -505,11 +540,16 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              LIMINAL_EDITOR_LUA_SKILL) into `<projectDir>/.claude/skills/
              liminal-lua/SKILL.md` if absent — never clobbers a customized one,
              skips when dest == source (the sample itself), logged + non-fatal.
-             The skill documents the `lm` Lua API + script lifecycle AND the
-             `.lscene` scene-file JSON schema (top-level `"liminal_scene": 1`
-             version key, entities/components layout, exact per-component field
-             names) so the `claude` in the Terminal panel can author scripts AND
-             hand-write/repair scene files accurately.
+             The skill is agent-first: it leads with a "Driving liminal as an
+             agent (MCP)" section (the division of labor — MCP = live editor state,
+             the agent's own file tools = .lua/.lscene on disk; the build loop;
+             a full ~30-tool MCP catalog table; live-vs-persisted) and a
+             Conventions section, then documents the `lm` Lua API + script
+             lifecycle AND the `.lscene` scene-file JSON schema (top-level
+             `"liminal_scene": 1` version key, entities/components layout, exact
+             per-component field names) so the `claude` in the Terminal panel can
+             drive the editor over MCP, author scripts, AND hand-write/repair scene
+             files accurately. Has a table of contents.
              Custom shader discovery (scanShaders): on project open the editor
              scans `<projectDir>/shaders/` and registers a pack per entry, then
              rebuilds shaderCatalog() = {"native","retro", ...discovered} for the
