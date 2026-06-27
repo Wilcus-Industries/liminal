@@ -2551,7 +2551,8 @@ void EditorApp::seedLuaSkill() {
     std::error_code ec;
     if (fs::exists(dest, ec)) return; // never clobber a customized skill
 
-    // Don't seed a project into its own canonical source (the sample project).
+    // Don't seed a project into its own canonical source (guards the unlikely
+    // case of opening the editor's own skill dir as a project).
     if (fs::weakly_canonical(dest, ec) ==
         fs::weakly_canonical(fs::path(srcPath), ec))
         return;

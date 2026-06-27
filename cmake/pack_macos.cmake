@@ -2,7 +2,7 @@
 #
 # Driven by the `package-mac` custom target (editor/CMakeLists.txt), invoked as
 # `cmake -P cmake/pack_macos.cmake` with these -D variables:
-#   EDITOR_EXE  PLAYER_EXE  FONT_TTF  EMOJI_TTF  SKILL_MD  SAMPLE_DIR
+#   EDITOR_EXE  PLAYER_EXE  FONT_TTF  EMOJI_TTF  SKILL_MD
 #   OUT_DIR  VERSION
 #
 # Layout produced (matches editor/resource_paths.hpp resolution):
@@ -10,7 +10,7 @@
 #     Info.plist
 #     MacOS/{liminal-editor, liminal-player}
 #     Resources/{JetBrainsMono.ttf, NotoColorEmoji.ttf,
-#                skills/liminal-lua/SKILL.md, sample_project/}
+#                skills/liminal-lua/SKILL.md}
 
 if(NOT EXISTS "${EDITOR_EXE}")
     message(FATAL_ERROR "editor binary not found: ${EDITOR_EXE} (build liminal-editor first)")
@@ -56,21 +56,6 @@ endif()
 if(SKILL_MD AND EXISTS "${SKILL_MD}")
     file(MAKE_DIRECTORY "${res}/skills/liminal-lua")
     file(COPY "${SKILL_MD}" DESTINATION "${res}/skills/liminal-lua")
-endif()
-
-if(SAMPLE_DIR AND EXISTS "${SAMPLE_DIR}")
-    # Exclude the multi-GB local LLM model (gitignored dev convenience, Meta
-    # Llama license) and machine-local junk (.DS_Store, the per-open-regenerated
-    # .mcp.json). Everything else — scenes, scripts, shaders, the .claude skill —
-    # ships so `--sample` works out of the box.
-    file(COPY "${SAMPLE_DIR}" DESTINATION "${res}"
-        PATTERN "models" EXCLUDE
-        PATTERN ".DS_Store" EXCLUDE
-        PATTERN ".mcp.json" EXCLUDE)
-    get_filename_component(_sn "${SAMPLE_DIR}" NAME)
-    if(NOT _sn STREQUAL "sample_project")
-        file(RENAME "${res}/${_sn}" "${res}/sample_project")
-    endif()
 endif()
 
 # App icon: build a Liminal.icns from the per-size PNGs in ICON_DIR and drop it
