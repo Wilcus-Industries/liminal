@@ -229,15 +229,24 @@ The host calls:
 Anything else in the table is your own state/helpers. File-scope locals are
 per-entity (fresh environment per instance), so module-level config is fine.
 
+**Per-entity state lives in the module table `M` or in file-scope locals — NOT
+on `self`.** `self` is a value handle that the engine rebuilds fresh every frame
+(see [The Entity handle](#the-entity-handle)); it has no arbitrary fields, so
+`self.won = false` raises `sol: cannot set (new_index) into this object`. Put the
+flag on `M` (or a `local`) instead — each entity instance gets its own copy:
+
 ```lua
 local M = {}
+M.won = false              -- per-entity state; persists across frames
 
 function M.on_start(self)
     lm.log("hello from " .. self.name)
 end
 
 function M.on_update(self, dt)
-    -- gameplay here
+    if not M.won then
+        -- gameplay here; set M.won = true when the win condition is met
+    end
 end
 
 return M
@@ -275,6 +284,13 @@ the file and saving re-reports if it still errors.
   `Light`, …) — no scene pre-authoring needed.
 - `self:remove_component("Light")` — remove a component by name (no-op if absent).
 - `self:has_component("Collider")` → bool.
+
+**`self` is not a scratch table (important):** only `self.name` is writable.
+Assigning any other field — `self.won = false`, `self.timer = 0` — raises
+`sol: cannot set (new_index) into this object`. It would be pointless even if
+allowed: `self` is reconstructed from `{entity, scene}` every frame, so writes
+would not survive to the next `on_update`. Keep per-entity state on the module
+table `M` or in file-scope locals (see [Script file shape](#script-file-shape-lifecycle)).
 
 **Frame-local pointer caveat (important):** components returned by `get_transform`
 / `get_mesh_renderer` / `get_component` are raw pointers into the entt registry,

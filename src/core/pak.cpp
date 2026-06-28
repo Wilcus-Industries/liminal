@@ -184,6 +184,10 @@ bool buildGamePak(const std::string& assetRoot, const std::string& startupScene,
         note("[build] asset root is not a directory: " + assetRoot);
         return false;
     }
+    // skipDir should be passed ABSOLUTE by callers; fs::absolute on a relative
+    // path resolves vs the CWD (not the project), which would skip the wrong
+    // subtree and make the packed-file count depend on where the editor was
+    // launched from. EditorApp::buildGame normalizes outExe before calling.
     const fs::path skip =
         skipDir.empty() ? fs::path() : fs::absolute(skipDir, ec).lexically_normal();
 

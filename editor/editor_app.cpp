@@ -119,6 +119,27 @@ std::string toLower(std::string s) {
     return s;
 }
 
+// Plain binary stream copy of a file. std::filesystem::copy_file on macOS goes
+// through clonefile/copyfile and can throw ENOTSUP ("Operation not supported")
+// depending on the source/dest filesystem — fatal for Build Game's player copy.
+// A raw read/write stream sidesteps that entirely. Returns false + fills err on
+// any failure (missing source, source is a directory, dest unwritable).
+bool copyFileBytes(const std::filesystem::path& from,
+                   const std::filesystem::path& to, std::string& err) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(from, ec)) {
+        err = "source is not a regular file: " + from.string();
+        return false;
+    }
+    std::ifstream in(from, std::ios::binary);
+    if (!in) { err = "cannot open source: " + from.string(); return false; }
+    std::ofstream out(to, std::ios::binary | std::ios::trunc);
+    if (!out) { err = "cannot open dest: " + to.string(); return false; }
+    out << in.rdbuf();
+    if (!out.good()) { err = "write failed: " + to.string(); return false; }
+    return true;
+}
+
 bool isKnownBinaryExt(const std::string& extLower) {
     static const char* kBinary[] = {
         ".png", ".jpg",  ".jpeg", ".tga", ".bmp", ".dds", ".ktx", ".ttf",
@@ -1883,10 +1904,10 @@ bool EditorApp::saveScene(const std::string& path) {
     return true;
 }
 
-void EditorApp::buildGame(const std::string& outPath) {
+bool EditorApp::buildGame(const std::string& outPath) {
     if (m_assetRoot.empty() || m_projectFile.empty()) {
         log("[build] no project open");
-        return;
+        return false;
     }
     log("[build] building game -> " + outPath);
 
@@ -1901,11 +1922,28 @@ void EditorApp::buildGame(const std::string& outPath) {
     if (!fs::exists(player, ec)) {
         log("[build] liminal-player not found beside editor (" + player.string() +
             "); build the liminal-player target first");
-        return;
+        return false;
     }
 
-    // 2. Output exe path (ensure .exe on Windows) + parent dirs.
+    // 2. Resolve the output exe path. A relative path is taken relative to the
+    // project directory (NOT the editor's CWD); an absolute path is used as-is.
+    const fs::path projDir = fs::path(m_projectFile).parent_path();
     fs::path outExe = fs::path(outPath);
+    if (outExe.empty())
+        outExe = projDir / "build";
+    else if (outExe.is_relative())
+        outExe = projDir / outExe;
+    outExe = outExe.lexically_normal();
+
+    // A directory target (empty filename, trailing separator, or an existing
+    // dir) gets a default filename derived from the project title — so no-arg
+    // and "/some/dir/" forms produce a file, not a copy-into-directory error.
+    const bool looksLikeDir =
+        outExe.filename().empty() || fs::is_directory(outExe, ec);
+    if (looksLikeDir) {
+        std::string stem = m_projectTitle.empty() ? "game" : m_projectTitle;
+        outExe /= stem;
+    }
 #if defined(_WIN32)
     if (toLower(outExe.extension().string()) != ".exe")
         outExe.replace_extension(".exe");
@@ -1913,30 +1951,45 @@ void EditorApp::buildGame(const std::string& outPath) {
     fs::create_directories(outExe.parent_path(), ec);
     if (ec) {
         log("[build] cannot create output directory: " + ec.message());
-        return;
+        return false;
     }
 
     // 3-4. Collect assets + synthesized project.ljson into a pak. Skip the
-    // build output dir if it happens to sit under the asset root.
+    // build output dir ONLY when it is a STRICT subdirectory of the asset root
+    // (e.g. <proj>/build). If the output lands directly in the project root
+    // (outParent == assetRoot, e.g. "<proj>/game"), skipping would drop the
+    // ENTIRE project — including scenes/ — producing an empty, broken pak (the
+    // "packed 0 asset file(s)" bug). The build artifacts themselves (the exe and
+    // its .pak sidecar) have no shippable extension, so they are never packed.
+    const fs::path root = fs::absolute(m_assetRoot, ec).lexically_normal();
+    const fs::path outParent = outExe.parent_path().lexically_normal();
+    std::string skipArg;
+    {
+        const fs::path relToRoot = outParent.lexically_relative(root);
+        if (!relToRoot.empty() && *relToRoot.begin() != ".." &&
+            relToRoot != fs::path("."))
+            skipArg = outParent.string(); // strictly inside the asset root
+    }
     PakWriter pak;
     const auto logFn = [this](const std::string& m) { log(m); };
-    if (!buildGamePak(m_assetRoot, m_startupScene, m_projectTitle, pak,
-                      outExe.parent_path().string(), logFn)) {
+    if (!buildGamePak(m_assetRoot, m_startupScene, m_projectTitle, pak, skipArg,
+                      logFn)) {
         log("[build] failed to collect project assets");
-        return;
+        return false;
     }
 
     // 5. Copy player -> outExe, then append the pak.
-    try {
-        fs::copy_file(player, outExe, fs::copy_options::overwrite_existing);
-    } catch (const std::exception& e) {
-        log("[build] copy player failed: " + std::string(e.what()));
-        return;
+    {
+        std::string cpErr;
+        if (!copyFileBytes(player, outExe, cpErr)) {
+            log("[build] copy player failed: " + cpErr);
+            return false;
+        }
     }
     bool sidecar = false;
     if (!pak.appendTo(outExe.string())) {
         log("[build] failed to append pak to " + outExe.string());
-        return;
+        return false;
     }
 #if !defined(_WIN32)
     fs::permissions(outExe,
@@ -1963,11 +2016,10 @@ void EditorApp::buildGame(const std::string& outPath) {
     if (rc != 0) {
         log("[build] codesign failed (rc=" + std::to_string(rc) +
             "); falling back to sidecar pak");
-        try {
-            fs::copy_file(player, outExe, fs::copy_options::overwrite_existing);
-        } catch (const std::exception& e) {
-            log("[build] clean player re-copy failed: " + std::string(e.what()));
-            return;
+        std::string cpErr;
+        if (!copyFileBytes(player, outExe, cpErr)) {
+            log("[build] clean player re-copy failed: " + cpErr);
+            return false;
         }
 #if !defined(_WIN32)
         fs::permissions(outExe,
@@ -1981,7 +2033,7 @@ void EditorApp::buildGame(const std::string& outPath) {
         { std::ofstream(side.string(), std::ios::binary | std::ios::trunc); }
         if (!pak.appendTo(side.string())) {
             log("[build] failed to write sidecar pak: " + side.string());
-            return;
+            return false;
         }
         sidecar = true;
         log("[build] sidecar pak: " + side.string());
@@ -2011,6 +2063,7 @@ void EditorApp::buildGame(const std::string& outPath) {
     // 8. Done.
     log("[build] complete: " + outExe.string() +
         (sidecar ? " (sidecar pak mode)" : " (appended pak mode)"));
+    return true;
 }
 
 Entity EditorApp::duplicateEntity(entt::entity src) {
@@ -2703,8 +2756,10 @@ void EditorApp::startMcpServer() {
             target = (base / "build" / stem).string();
 #endif
         }
-        buildGame(target); // synchronous; logs progress/result to the console
-        return {{"ok", true}, {"outPath", target}};
+        const bool ok = buildGame(target); // synchronous; logs to the console
+        nlohmann::json res{{"ok", ok}, {"outPath", target}};
+        if (!ok) res["error"] = "build failed; see console_log for details";
+        return res;
     };
 
     m_mcp = std::make_unique<McpServer>(std::move(provider));

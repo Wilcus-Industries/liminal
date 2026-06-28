@@ -102,7 +102,10 @@ Once connected, the project directory now contains
 Follow its build loop: discover valid components/assets → read the scene →
 mutate → `save_scene` → `validate_scene` / `screenshot` / `play_game` → iterate.
 Author scripts as `.lua` files with your own file tools; the editor hot-reloads
-them in Play.
+them in Play. A script returns a module table `M` with `on_start(self)` /
+`on_update(self, dt)`; keep per-entity state on `M` or file-scope locals — `self`
+is read-only apart from `self.name` (writing `self.foo` errors). The liminal-lua
+skill has the full lifecycle.
 
 ## Quick start (from an empty directory)
 

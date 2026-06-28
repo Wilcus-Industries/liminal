@@ -485,7 +485,20 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              cursor, Ctrl+Space manual trigger — works without scripting flag),
              Build Game (Game menu → buildGame, uses buildGamePak in core/pak.cpp;
              on macOS falls back to an exe+.pak sidecar when appending a Mach-O fails
-             codesigning),
+             codesigning. buildGame returns bool now (false on any failure) so the
+             MCP build_game tool reports an honest {ok}. Output-path handling is
+             hardened: a relative outPath resolves against the PROJECT dir (not the
+             editor CWD); a directory/empty/trailing-slash target gets a default
+             filename from the project title (no more copy-into-directory errors);
+             the player binary is copied with a plain binary stream (file-local
+             copyFileBytes), NOT fs::copy_file, to dodge the macOS clonefile ENOTSUP
+             "Operation not supported". The buildGamePak skipDir (prior-build
+             exclusion) is passed ONLY when the output dir is a STRICT subdirectory
+             of the asset root — when output lands directly in the project root the
+             skip is omitted so the whole project isn't dropped (was the "packed 0
+             asset file(s)" bug; the exe + .pak themselves have no shippable ext so
+             they're never packed). pak.cpp's skipDir is documented as
+             caller-must-pass-absolute),
              theme (editor/theme.{hpp,cpp}: self-contained ImGui theme registry —
              theme::registry() returns built-in {Dark,Light,Liminal(default),
              High Contrast} as {name, apply(ImGuiStyle&)} entries (each seeds from
@@ -594,6 +607,9 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              open_scene (input {path} → openScene(path); resolves via Assets,
              auto-stops Play), new_scene (no input → newScene()), build_game (input
              {path?:string}, empty → <projectDir>/build/<title> → buildGame();
+             relative path resolves against the project dir, a directory target
+             gets a title-derived filename; returns {ok:bool,outPath[,error]}
+             (ok now reflects real success — false adds an error string);
              synchronous on the main thread, a large build may exceed the 5s
              marshal window so the caller gets a timeout while the build still
              completes — poll console_log). Feedback tools: select_entity (input
@@ -645,7 +661,11 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              the agent's own file tools = .lua/.lscene on disk; the build loop;
              a full ~30-tool MCP catalog table; live-vs-persisted) and a
              Conventions section, then documents the `lm` Lua API + script
-             lifecycle AND the `.lscene` scene-file JSON schema (top-level
+             lifecycle (incl. an explicit warning that `self` is NOT a scratch
+             table — only `self.name` is writable; `self.foo = x` raises
+             "sol: cannot set (new_index) into this object"; per-entity state lives
+             on the returned module table `M` / file-scope locals) AND the
+             `.lscene` scene-file JSON schema (top-level
              `"liminal_scene": 1` version key, entities/components layout, exact
              per-component field names) so the `claude` in the Terminal panel can
              drive the editor over MCP, author scripts, AND hand-write/repair scene
@@ -674,15 +694,20 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              never-clobber (unless force) — Claude → ~/.claude/skills/liminal/
              SKILL.md (frontmatter kept), Codex → ~/.codex/liminal-bootstrap.md,
              Generic → ~/.config/liminal/agent-bootstrap.md (both frontmatter-
-             stripped). For Claude it ALSO merges a user-scope `liminal` HTTP MCP
-             entry into ~/.claude.json (parse-and-merge like writeMcpJson, but
-             REFUSES to clobber an unparseable config — it's the user's whole Claude
-             config) pointing at the pinned port, so `editor running → open claude`
-             auto-connects in ANY dir with zero reconnect. Reconnect gotcha
-             workaround = pin port (--mcp-port → deterministic bind) + the curl
-             fallback documented in the skill (the agent drives tools/call over
-             Bash with no MCP integration + no reconnect — the real "around" for a
-             mid-session launch). Delivery: (1) auto-install-once on first project
+             stripped). For Claude it does NOT write a user-scope `liminal` MCP
+             entry into ~/.claude.json — that was REMOVED (removeUserScopeMcp):
+             the editor's MCP server is in-process and only listens while the editor
+             runs, so a GLOBAL 127.0.0.1:<port> entry was dead whenever the editor
+             was closed, making EVERY `claude` session in EVERY directory fail to
+             connect. Instead installAgentSkill now STRIPS any stale `mcpServers.
+             liminal` entry from ~/.claude.json (parse-and-merge, REFUSES to clobber
+             an unparseable config) so prior installs self-heal. Agents reach the
+             server via the per-project <projectDir>/.mcp.json (only present inside a
+             liminal project) + the bootstrap skill's --headless launch + curl flow.
+             Reconnect gotcha workaround = pin port (--mcp-port → deterministic
+             bind) + the curl fallback documented in the skill (the agent drives
+             tools/call over Bash with no MCP integration + no reconnect — the real
+             "around" for a mid-session launch). Delivery: (1) auto-install-once on first project
              open (openProject, after startMcpServer, guarded by m_agentSkillSeeded,
              uses the actually-bound m_mcp->port()); (2) Tools menu → "Install Agent
              Skill" (force-overwrite, same seam); (3) CLI --install-skill /
