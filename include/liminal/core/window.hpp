@@ -59,8 +59,26 @@ public:
     // Mouse look: when captured, the cursor is hidden/locked and we
     // accumulate deltas. When not captured, deltas are zero.
     void setCursorCaptured(bool captured);
-    bool cursorCaptured() const { return m_captured; }
+    bool cursorCaptured() const { return m_captured || m_synthCapture; }
     void mouseDelta(float& dx, float& dy);
+
+    // --- synthetic input (agent autopilot) ---------------------------------
+    // A second input source that ORs into the live GLFW reads above, so an MCP
+    // agent can "play" the game: in a normal window it combines with human
+    // input; in offscreen/headless mode (no GLFW) it is the ONLY source. Held
+    // until released (holdSeconds<=0) or auto-released after holdSeconds via
+    // tickSyntheticInput. All no-throw, bounds-checked.
+    void setSyntheticKey(int glfwKey, bool down, double holdSeconds = 0.0);
+    void setSyntheticMouse(int glfwButton, bool down, double holdSeconds = 0.0);
+    // Accumulate a one-shot mouse-look delta (consumed by the next mouseDelta).
+    void injectMouseLook(float dx, float dy);
+    // Make cursorCaptured() report true even with no real capture, so scripts
+    // that gate mouse-look on cursor_captured() run under agent control.
+    void setSyntheticCapture(bool captured) { m_synthCapture = captured; }
+    // Release every synthetic key/button/look/capture (call on Play stop).
+    void clearSyntheticInput();
+    // Release any synthetic key/button whose hold deadline has passed.
+    void tickSyntheticInput(double now);
 
     double time() const;
     GLFWwindow* handle() const { return m_window; }
@@ -74,6 +92,15 @@ private:
     float m_accumScroll = 0.0f;
     bool m_prevKey[512] = {};
     bool m_prevMouse[8] = {};
+
+    // --- synthetic input state (agent autopilot, see setSyntheticKey) ---
+    bool m_synthKey[512] = {};
+    bool m_synthMouse[8] = {};
+    float m_synthDX = 0.0f, m_synthDY = 0.0f; // one-shot look delta
+    bool m_synthCapture = false;
+    // Auto-release deadlines (Window::time() seconds); 0 = held until released.
+    double m_synthKeyDeadline[512] = {};
+    double m_synthMouseDeadline[8] = {};
 
     // --- display-less (offscreen) mode ---
     // When m_offscreen, there is no GLFWwindow: m_offCtx owns the GL context and

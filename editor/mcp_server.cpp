@@ -163,6 +163,45 @@ nlohmann::json toolSchemas() {
          {"description",
           "Stop play-in-editor and restore the pre-play scene snapshot."},
          {"inputSchema", none}},
+        {{"name", "send_input"},
+         {"description",
+          "Feed synthetic keyboard/mouse input into the running game so an "
+          "agent can play it. Only works during Play. Keys named as single "
+          "characters (\"w\",\"a\") or names (space,shift,ctrl,alt,enter,tab,esc,"
+          "up,down,left,right). keys_down/mouse_down are HELD until released "
+          "(keys_up/mouse_up) unless hold_ms>0 auto-releases them. look_dx/"
+          "look_dy add a one-shot mouse-look delta. Set capture=true once so "
+          "scripts gating on cursor_captured() respond. Observe the effect via "
+          "the screenshot tool."},
+         {"inputSchema",
+          obj({{"keys_down",
+                {{"type", "array"},
+                 {"items", {{"type", "string"}}},
+                 {"description", "keys to press/hold"}}},
+               {"keys_up",
+                {{"type", "array"},
+                 {"items", {{"type", "string"}}},
+                 {"description", "keys to release"}}},
+               {"mouse_down",
+                {{"type", "array"},
+                 {"items", {{"type", "integer"}}},
+                 {"description", "mouse buttons to press/hold (0=left)"}}},
+               {"mouse_up",
+                {{"type", "array"},
+                 {"items", {{"type", "integer"}}},
+                 {"description", "mouse buttons to release"}}},
+               {"look_dx", {{"type", "number"},
+                            {"description", "one-shot horizontal mouse-look"}}},
+               {"look_dy", {{"type", "number"},
+                            {"description", "one-shot vertical mouse-look"}}},
+               {"hold_ms",
+                {{"type", "number"},
+                 {"description",
+                  "auto-release pressed keys/buttons after N ms (0 = hold)"}}},
+               {"capture",
+                {{"type", "boolean"},
+                 {"description", "report cursor_captured() true for look"}}}},
+              {})}},
         {{"name", "reload_scene"},
          {"description",
           "Reload the current scene from disk, discarding live in-memory edits "
@@ -661,6 +700,14 @@ nlohmann::json McpServer::callTool(const std::string& name,
             return m_provider.control
                        ? m_provider.control("stop")
                        : nlohmann::json{{"error", "control unavailable"}};
+        });
+    }
+
+    if (name == "send_input") {
+        return marshalText([this, args]() -> nlohmann::json {
+            return m_provider.sendInput
+                       ? m_provider.sendInput(args)
+                       : nlohmann::json{{"error", "sendInput unavailable"}};
         });
     }
 

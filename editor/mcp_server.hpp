@@ -63,6 +63,11 @@ struct McpProvider {
     // Drive play state: action ∈ "play"|"pause"|"resume"|"stop". Returns the
     // resulting play state ({ "mode", "paused" }) or { "error": ... }.
     std::function<nlohmann::json(const std::string& action)> control;
+    // Feed synthetic input into the running game (agent autopilot). Takes the
+    // raw send_input args ({ keys_down, keys_up, mouse_down, mouse_up, look_dx,
+    // look_dy, hold_ms, capture }) and applies them to the Window. Only valid
+    // in Play. { "ok": true } or { "error": ... }.
+    std::function<nlohmann::json(const nlohmann::json& cmd)> sendInput;
     // Reload the current scene from disk (discards live in-memory edits).
     // { "ok": true, "scenePath": ... } or { "error": ... }.
     std::function<nlohmann::json()> reloadScene;

@@ -282,6 +282,11 @@ void EditorApp::run() {
         // safely (the http threads parked them here — see mcp_server.hpp).
         if (m_mcp) m_mcp->pump();
 
+        // Release any agent-injected input whose hold deadline passed, so a
+        // send_input from this frame's pump is honored and last frame's timed
+        // taps expire before the scripts read input.
+        m_window.tickSyntheticInput(m_window.time());
+
         // Hot-reload custom shaders edited on disk (throttled ~0.5s inside).
         tickShaderWatch();
 
@@ -350,6 +355,11 @@ void EditorApp::runHeadless() {
         // Drain MCP tool tasks on the main thread so they read scene state
         // safely (the http threads parked them here — see mcp_server.hpp).
         if (m_mcp) m_mcp->pump();
+
+        // Release any agent-injected input whose hold deadline passed, so a
+        // send_input from this frame's pump is honored and last frame's timed
+        // taps expire before the scripts read input.
+        m_window.tickSyntheticInput(m_window.time());
 
         // Hot-reload custom shaders edited on disk (throttled ~0.5s inside).
         tickShaderWatch();
@@ -2064,7 +2074,8 @@ void EditorApp::buildPlayScriptHost() {
 void EditorApp::stopPlay() {
     if (m_mode != Mode::Play) return;
     m_scripts.reset();
-    m_window.setCursorCaptured(false); // a script may have left the cursor locked
+    m_window.setCursorCaptured(false);  // a script may have left the cursor locked
+    m_window.clearSyntheticInput(); // drop agent-held input so it can't leak
 #if defined(LIMINAL_WITH_INFERENCE)
     // Release model memory between play sessions; the engine object persists
     // and start()s again on the next lm.ai.start.
@@ -2355,6 +2366,80 @@ void EditorApp::startMcpServer() {
         }
         return {{"mode", m_mode == Mode::Play ? "play" : "edit"},
                 {"paused", m_paused}};
+    };
+
+    // Agent autopilot: feed synthetic input into the running game. Maps key
+    // names (single chars → GLFW ASCII letter/digit codes, plus a small set of
+    // named keys) and applies held/timed presses to the Window (see
+    // Window::setSyntheticKey). Only meaningful in Play.
+    provider.sendInput = [this](const nlohmann::json& cmd) -> nlohmann::json {
+        if (m_mode != Mode::Play) return {{"error", "not playing"}};
+        auto keyCode = [](const std::string& s) -> int {
+            if (s.size() == 1) // letters/digits share GLFW's ASCII codes
+                return std::toupper(static_cast<unsigned char>(s[0]));
+            std::string n;
+            n.reserve(s.size());
+            for (char c : s)
+                n.push_back(static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(c))));
+            if (n == "space") return GLFW_KEY_SPACE;
+            if (n == "shift" || n == "lshift") return GLFW_KEY_LEFT_SHIFT;
+            if (n == "ctrl" || n == "control") return GLFW_KEY_LEFT_CONTROL;
+            if (n == "alt") return GLFW_KEY_LEFT_ALT;
+            if (n == "enter" || n == "return") return GLFW_KEY_ENTER;
+            if (n == "tab") return GLFW_KEY_TAB;
+            if (n == "esc" || n == "escape") return GLFW_KEY_ESCAPE;
+            if (n == "up") return GLFW_KEY_UP;
+            if (n == "down") return GLFW_KEY_DOWN;
+            if (n == "left") return GLFW_KEY_LEFT;
+            if (n == "right") return GLFW_KEY_RIGHT;
+            return -1;
+        };
+        const double holdS = cmd.value("hold_ms", 0.0) / 1000.0;
+        if (cmd.contains("capture"))
+            m_window.setSyntheticCapture(cmd.value("capture", false));
+        int applied = 0;
+        auto eachStr = [&](const char* field, auto fn) {
+            auto it = cmd.find(field);
+            if (it == cmd.end() || !it->is_array()) return;
+            for (const auto& v : *it)
+                if (v.is_string()) fn(v.get<std::string>());
+        };
+        auto eachInt = [&](const char* field, auto fn) {
+            auto it = cmd.find(field);
+            if (it == cmd.end() || !it->is_array()) return;
+            for (const auto& v : *it)
+                if (v.is_number_integer()) fn(v.get<int>());
+        };
+        eachStr("keys_down", [&](const std::string& s) {
+            int k = keyCode(s);
+            if (k >= 0) {
+                m_window.setSyntheticKey(k, true, holdS);
+                ++applied;
+            }
+        });
+        eachStr("keys_up", [&](const std::string& s) {
+            int k = keyCode(s);
+            if (k >= 0) {
+                m_window.setSyntheticKey(k, false);
+                ++applied;
+            }
+        });
+        eachInt("mouse_down", [&](int b) {
+            m_window.setSyntheticMouse(b, true, holdS);
+            ++applied;
+        });
+        eachInt("mouse_up", [&](int b) {
+            m_window.setSyntheticMouse(b, false);
+            ++applied;
+        });
+        const float dx = static_cast<float>(cmd.value("look_dx", 0.0));
+        const float dy = static_cast<float>(cmd.value("look_dy", 0.0));
+        if (dx != 0.0f || dy != 0.0f) {
+            m_window.injectMouseLook(dx, dy);
+            ++applied;
+        }
+        return {{"ok", true}, {"applied", applied}};
     };
 
     provider.reloadScene = [this]() -> nlohmann::json {
