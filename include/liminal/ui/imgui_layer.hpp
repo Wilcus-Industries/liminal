@@ -17,6 +17,12 @@ public:
 
     void beginFrame(); // ImGui_ImplX_NewFrame + ImGui::NewFrame
     void endFrame();   // ImGui::Render + RenderDrawData
+
+private:
+    // False when constructed against a windowless (offscreen/headless) context:
+    // ImGui's GLFW backend needs a real GLFWwindow, so the whole layer becomes a
+    // no-op shell. runHeadless never draws UI anyway.
+    bool m_active = false;
 };
 
 } // namespace liminal

@@ -13,6 +13,13 @@ option(LIMINAL_WITH_INFERENCE "Build with llama.cpp local inference" ON)
 option(LIMINAL_BUILD_EDITOR   "Build the editor (pulls ImGuizmo)" ${PROJECT_IS_TOP_LEVEL})
 option(LIMINAL_BUILD_PLAYER   "Build standalone game player" ${PROJECT_IS_TOP_LEVEL})
 option(LIMINAL_BUILD_TESTS    "Build headless tests (ctest)" ${PROJECT_IS_TOP_LEVEL})
+# Display-less headless: a GL context with NO window / NO display server, so
+# `liminal-editor --headless` runs on a bare box (CI, cloud VM, SSH). EGL
+# surfaceless is the portable backend — a real GPU when present, llvmpipe
+# software otherwise — and works on Linux AND macOS via Homebrew Mesa's libEGL.
+# OSMesa is an opt-in alternative for boxes that ship libOSMesa but no EGL.
+option(LIMINAL_HEADLESS_OFFSCREEN "Build the display-less offscreen GL backend" OFF)
+option(LIMINAL_HEADLESS_OSMESA    "Use OSMesa (not EGL) for the offscreen backend" OFF)
 
 # Warning flags applied ONLY to liminal's own translation units — never to the
 # vendored sources we compile in-tree (ImGui, ImGuizmo, ImGuiColorTextEdit,
@@ -38,6 +45,51 @@ else()
     set(LIMINAL_GL_MINOR 6)
 endif()
 message(STATUS "liminal: targeting OpenGL ${LIMINAL_GL_MAJOR}.${LIMINAL_GL_MINOR} core profile")
+
+# ---------------------------------------------------------------------------
+# Display-less offscreen GL backend (LIMINAL_HEADLESS_OFFSCREEN).
+# Resolves the backend's define + include dirs + libraries into
+# LIMINAL_OFFSCREEN_{DEFINE,INCLUDES,LIBS}; these attach to the liminal lib and
+# editor below. Default-off leaves every target byte-identical.
+# ---------------------------------------------------------------------------
+set(LIMINAL_OFFSCREEN_DEFINE "")
+set(LIMINAL_OFFSCREEN_INCLUDES "")
+set(LIMINAL_OFFSCREEN_LIBS "")
+if(LIMINAL_HEADLESS_OFFSCREEN)
+    if(LIMINAL_HEADLESS_OSMESA)
+        # OSMesa: pure-CPU rasteriser. Search system paths + a Homebrew keg.
+        find_library(LIMINAL_OSMESA_LIB OSMesa
+            HINTS /opt/homebrew/opt/mesa/lib /usr/local/opt/mesa/lib)
+        find_path(LIMINAL_OSMESA_INC GL/osmesa.h
+            HINTS /opt/homebrew/opt/mesa/include /usr/local/opt/mesa/include)
+        if(NOT LIMINAL_OSMESA_LIB OR NOT LIMINAL_OSMESA_INC)
+            message(FATAL_ERROR
+                "LIMINAL_HEADLESS_OSMESA: libOSMesa/GL/osmesa.h not found. "
+                "Install Mesa with OSMesa, or use the default EGL backend "
+                "(-DLIMINAL_HEADLESS_OSMESA=OFF).")
+        endif()
+        set(LIMINAL_OFFSCREEN_DEFINE   LIMINAL_HEADLESS_OSMESA)
+        set(LIMINAL_OFFSCREEN_INCLUDES ${LIMINAL_OSMESA_INC})
+        set(LIMINAL_OFFSCREEN_LIBS     ${LIMINAL_OSMESA_LIB})
+        message(STATUS "liminal: offscreen backend = OSMesa (${LIMINAL_OSMESA_LIB})")
+    else()
+        # EGL surfaceless/device. System lib on Linux; Homebrew Mesa on macOS.
+        find_library(LIMINAL_EGL_LIB NAMES EGL libEGL
+            HINTS /opt/homebrew/opt/mesa/lib /usr/local/opt/mesa/lib)
+        find_path(LIMINAL_EGL_INC EGL/egl.h
+            HINTS /opt/homebrew/opt/mesa/include /usr/local/opt/mesa/include)
+        if(NOT LIMINAL_EGL_LIB OR NOT LIMINAL_EGL_INC)
+            message(FATAL_ERROR
+                "LIMINAL_HEADLESS_OFFSCREEN: libEGL/EGL/egl.h not found. "
+                "On macOS: brew install mesa. On Linux: install libegl1-mesa-dev "
+                "(or the vendor EGL).")
+        endif()
+        set(LIMINAL_OFFSCREEN_DEFINE   LIMINAL_HEADLESS_EGL)
+        set(LIMINAL_OFFSCREEN_INCLUDES ${LIMINAL_EGL_INC})
+        set(LIMINAL_OFFSCREEN_LIBS     ${LIMINAL_EGL_LIB})
+        message(STATUS "liminal: offscreen backend = EGL (${LIMINAL_EGL_LIB})")
+    endif()
+endif()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Dependencies.cmake)
 
@@ -156,6 +208,7 @@ add_library(liminal STATIC
     src/core/platform.cpp
     src/core/pty.cpp
     src/core/window.cpp
+    src/core/offscreen_context.cpp
     src/scene/scene.cpp
     src/scene/components.cpp
     src/scene/component_registry.cpp
@@ -193,6 +246,15 @@ target_compile_definitions(liminal PUBLIC
 if(APPLE)
     # Apple marked OpenGL deprecated in 10.14; it still works fine.
     target_compile_definitions(liminal PUBLIC GL_SILENCE_DEPRECATION)
+endif()
+
+# Wire the resolved offscreen backend (EGL/OSMesa) into the lib. The define is
+# PUBLIC so window.cpp + offscreen_context.{hpp,cpp} compile the backend, and the
+# header's LIMINAL_HAS_OFFSCREEN gate flips on across every consumer.
+if(LIMINAL_HEADLESS_OFFSCREEN)
+    target_compile_definitions(liminal PUBLIC ${LIMINAL_OFFSCREEN_DEFINE})
+    target_include_directories(liminal PRIVATE ${LIMINAL_OFFSCREEN_INCLUDES})
+    target_link_libraries(liminal PRIVATE ${LIMINAL_OFFSCREEN_LIBS})
 endif()
 
 target_link_libraries(liminal

@@ -50,9 +50,24 @@ public:
     // startEmpty: skip the landing screen and open the editor on a blank scene
     // (the --empty CLI path). Empty + !startEmpty: show the landing / project
     // chooser screen (the default no-arg launch).
-    explicit EditorApp(std::string projectFile, bool startEmpty = false);
+    // headless=true brings the engine + MCP server up with no ImGui: the ctor
+    // opens (or auto-scaffolds) projectFile directly and run() must NOT be called
+    // — call runHeadless() instead. The landing chooser is GUI-only, so headless
+    // requires a non-empty projectFile. offscreen=true (headless only) uses a
+    // DISPLAY-LESS GL context (EGL/OSMesa, no window/display server) instead of a
+    // hidden GLFW window; requires an offscreen backend compiled in, else Window
+    // falls back to the hidden window.
+    explicit EditorApp(std::string projectFile, bool startEmpty = false,
+                       bool headless = false, bool offscreen = false);
     ~EditorApp(); // out-of-line: m_audio holds an incomplete Audio
     void run();
+    // Engine-only loop for --headless: MCP pump + script update (in Play) +
+    // scene render to the offscreen FBO, no ImGui / panels / swapBuffers. Exits
+    // when m_window.shouldClose() (driven by a SIGINT/SIGTERM handler in main).
+    void runHeadless();
+    // Ask the loop (run or runHeadless) to exit at the next iteration. Sets the
+    // GLFW close flag; safe to call from a signal handler.
+    void requestQuit();
 
 private:
     enum class Mode { Edit, Play };
@@ -72,6 +87,15 @@ private:
     // scenes/main.lscene (primary camera + cube + light), then openProject it.
     // Logs + non-fatal on filesystem errors.
     void createProject(const std::string& parentDir, const std::string& name);
+    // Write project.ljson + a default scenes/main.lscene directly INTO root
+    // (title used verbatim). Shared by createProject (root = parentDir/name) and
+    // the headless open-or-scaffold path (root = the given dir itself). Returns
+    // false + logs on filesystem error.
+    bool scaffoldProject(const std::filesystem::path& root,
+                         const std::string& title);
+    // Headless entry: open projectDir if it already has a project.ljson, else
+    // scaffold a fresh project into it first, then open. Used by runHeadless.
+    void openOrCreateProject(const std::string& projectDir);
 
     // --- theming ---
     // The single seam for switching ImGui themes. Both the Theme menu and any
@@ -289,6 +313,11 @@ private:
     float m_dt = 0.0f;
     glm::mat4 m_view{1.0f};
     glm::mat4 m_proj{1.0f};
+
+    // --- headless ---
+    // True for the --headless CLI path: hidden GL window, no ImGui, runHeadless()
+    // instead of run(). Set in the ctor before the project is opened.
+    bool m_headless = false;
 
     // --- landing screen ---
     Screen m_screen = Screen::Landing; // start on the chooser unless a project opens

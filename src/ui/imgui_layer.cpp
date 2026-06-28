@@ -13,6 +13,12 @@
 namespace liminal {
 
 ImGuiLayer::ImGuiLayer(Window& window) {
+    // The ImGui context itself (io flags, style, font atlas) is CPU-side and is
+    // always created — the editor ctor touches ImGui::GetIO()/fonts even in
+    // headless. Only the GLFW + OpenGL3 BACKENDS need a real GLFWwindow + a
+    // presentable context, so they're skipped for a windowless (offscreen)
+    // context; with no backends, beginFrame/endFrame become no-ops and no UI is
+    // ever drawn (runHeadless never calls them anyway).
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
 
@@ -20,6 +26,9 @@ ImGuiLayer::ImGuiLayer(Window& window) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     ImGui::StyleColorsDark();
+
+    if (window.handle() == nullptr) return; // offscreen: context only, no backends
+    m_active = true;
 
     // install_callbacks = true: ImGui chains GLFW's input callbacks and
     // forwards to any previously-installed ones, so Window's own input
@@ -32,18 +41,22 @@ ImGuiLayer::ImGuiLayer(Window& window) {
 
 ImGuiLayer::~ImGuiLayer() {
     // Backends must come down before the context they registered with.
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
+    if (m_active) {
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+    }
     ImGui::DestroyContext();
 }
 
 void ImGuiLayer::beginFrame() {
+    if (!m_active) return;
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 }
 
 void ImGuiLayer::endFrame() {
+    if (!m_active) return;
     // Render() finalizes the draw lists; RenderDrawData replays them with
     // the GL3 backend's own state (it saves/restores GL state itself, so it
     // won't trample the renderer's bindings).

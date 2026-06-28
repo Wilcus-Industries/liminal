@@ -24,6 +24,8 @@ CMake options (root `CMakeLists.txt`):
 | `LIMINAL_BUILD_EDITOR` | top-level | Editor (pulls ImGuizmo) |
 | `LIMINAL_BUILD_PLAYER` | top-level | Standalone game player (`liminal-player`) |
 | `LIMINAL_BUILD_TESTS` | top-level | Headless ctest tests |
+| `LIMINAL_HEADLESS_OFFSCREEN` | OFF | Display-less GL context for `--headless` (EGL surfaceless by default; needs libEGL — `brew install mesa` on macOS, `libegl1-mesa-dev` on Linux) |
+| `LIMINAL_HEADLESS_OSMESA` | OFF | Use OSMesa (CPU) instead of EGL for the offscreen backend (needs libOSMesa) |
 
 No install/export rules — liminal is no longer a `find_package` consumable; the lib is internal to the editor/player builds.
 
@@ -314,7 +316,77 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              liminal::userConfigDir()/recent_projects.json (newest-first, deduped
              by canonical path, capped 15). openProject records the project +
              flips m_screen to Editor. CLI: no args = landing, --project <p> opens
-             straight into the editor, --empty = blank editor scene.
+             straight into the editor, --empty = blank editor scene,
+             --headless --project <p> = GUI-less mode (below).
+             HEADLESS MODE (--headless, editor/main.cpp): runs the SAME EditorApp
+             with a HIDDEN GL window (Window ctor gained a `visible` param =
+             GLFW_VISIBLE off + vsync off — the context + offscreen FBO still work
+             so Renderer/readPixels/screenshot are fully functional) and NO ImGui
+             drawing. The ctor takes `headless` + `offscreen` bools; when headless
+             is set it opens the project via openOrCreateProject (no landing
+             fallback — the chooser is GUI-only) and main() calls runHeadless()
+             instead of run().
+             runHeadless() is an engine-only mirror of run(): m_mcp->pump() +
+             tickShaderWatch() + (in Play) m_scripts->update + the deferred
+             lm.scene.change swap + scene render into the FBO, NO
+             beginFrame/drawUi/endFrame/swapBuffers, ~30fps sleep cap (no vsync).
+             The MCP server (startMcpServer, ALL ~30 tools incl. screenshot via
+             the offscreen FBO, .mcp.json + liminal-lua skill seeding) is the sole
+             driver — an external `claude`/MCP client pointed at the project dir
+             runs it; nothing editor-specific is stubbed (selection/console/camera
+             state all exist and work). log() echoes to stdout when m_headless so
+             the bound MCP URL + project/script logs are visible. --headless
+             REQUIRES --project (enforced in main → exit 2); an empty/new dir is
+             auto-scaffolded by scaffoldProject(root,title) (extracted from
+             createProject; writes project.ljson + scenes/main.lscene into the dir
+             itself, titled after its folder). Exit via SIGINT/SIGTERM →
+             requestQuit() (sets the close flag).
+             DISPLAY-LESS (offscreen) backend (LIMINAL_HEADLESS_OFFSCREEN, OFF by
+             default): with the hidden GLFW window, --headless still needs a
+             DISPLAY SERVER to create the GL context (WindowServer on macOS,
+             X11/Wayland on Linux) — useless on a bare-SSH/CI box. Turn the option
+             ON and headless instead creates a TRULY display-less context via
+             OffscreenContext (include/liminal/core/offscreen_context.{hpp,cpp},
+             compiled into the liminal lib only when a backend is enabled, gated by
+             the LIMINAL_HAS_OFFSCREEN umbrella macro the header sets):
+               • EGL (default) — eglGetPlatformDisplay surfaceless / EXT_platform_
+                 device, eglBindAPI(EGL_OPENGL_API), no-config + EGL_NO_SURFACE
+                 context at LIMINAL_GL_MAJOR/MINOR core. Portable: a real GPU when
+                 present (NVIDIA / Mesa HW, full GL 4.6), llvmpipe SOFTWARE
+                 otherwise. Works on Linux AND macOS via Homebrew Mesa's libEGL
+                 (`brew install mesa`; note current Homebrew Mesa ships libEGL but
+                 NOT libOSMesa). CMake define LIMINAL_HEADLESS_EGL.
+               • OSMesa (opt-in, -DLIMINAL_HEADLESS_OSMESA=ON) — pure-CPU
+                 OSMesaCreateContextAttribs into a held client buffer; for boxes
+                 with libOSMesa but no usable EGL. CMake define LIMINAL_HEADLESS_OSMESA.
+             gladLoadGL reuses the EXISTING desktop-GL loader via the backend's
+             eglGetProcAddress/OSMesaGetProcAddress — no glad regeneration. The
+             engine renders into its own FBO and readPixels reads THAT back, so
+             screenshots + ALL ~30 MCP tools are byte-for-byte unaffected (proven:
+             screenshot of a builtin:pyramid scene renders correctly through
+             llvmpipe with no window). When offscreen, Window holds an
+             OffscreenContext instead of a GLFWwindow (m_window stays null) and
+             every GLFW-touching method short-circuits: shouldClose/requestClose →
+             m_closeFlag, framebufferSize → the stored size, time() →
+             steady_clock, pollEvents/swapBuffers/setVsync + all input → no-op/zero,
+             handle() → nullptr. ImGuiLayer keys off handle()==nullptr: it always
+             creates the ImGui context (the editor ctor touches GetIO()/fonts even
+             headless) but SKIPS the GLFW + OpenGL3 BACKENDS (m_active=false), so
+             beginFrame/endFrame no-op — runHeadless never draws UI anyway. If the
+             option is OFF (or the backend fails at runtime) Window falls back to
+             the hidden GLFW window, so --headless still works wherever a display
+             server exists. SELECTION: main.cpp `--display auto|offscreen|glfw`
+             (default auto = offscreen iff a backend was compiled in, else hidden
+             window; offscreen forces it, warns + falls back if none compiled; glfw
+             forces the hidden window for local A/B on a Mac with a display). The
+             [gl] startup line tags the active context, e.g.
+             "llvmpipe ... (offscreen: EGL)" vs "Apple M1 Pro". Caveat: software
+             llvmpipe is correct but slow — fine for screenshots, not high-fps
+             interactive; a GPU instance with the EGL device platform gets HW
+             acceleration. The CMake find probes /opt/homebrew/opt/mesa +
+             /usr/local/opt/mesa for libEGL/libOSMesa (Homebrew keg) plus system
+             paths; the Homebrew libEGL's absolute install_name means no DYLD_*
+             env is needed at runtime.
              File > Close Project (closeProject, enabled only with a project
              open) tears the project down — resets m_mcp, re-seeds the default
              panel set (seedDefaultPanels: all instances dropped, terminals

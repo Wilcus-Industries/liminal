@@ -9,11 +9,25 @@ struct GLFWwindow;
 
 namespace liminal {
 
+class OffscreenContext; // display-less GL context (offscreen_context.hpp)
+
 class Window {
 public:
     // Creates the window and a core-profile GL context (version injected by
     // CMake: 4.1 on macOS, 4.6 elsewhere), makes it current, loads GL via glad.
-    Window(int width, int height, const std::string& title);
+    // visible=false hides the window (GLFW_VISIBLE off) and disables vsync — the
+    // headless path still gets a real GL context + offscreen FBO (so the
+    // Renderer and readPixels/screenshot work) without painting to screen.
+    //
+    // offscreen=true creates a DISPLAY-LESS context (EGL surfaceless / OSMesa,
+    // see OffscreenContext) — no GLFW window, no display server at all — for
+    // truly headless boxes (CI, cloud VMs, bare SSH). The GL context + FBO still
+    // work, so screenshots and every MCP tool are unaffected; all windowing/input
+    // methods become no-ops (handle() is null, input reads return none). If no
+    // offscreen backend was compiled in, the request falls back to a hidden GLFW
+    // window so --headless still works wherever a display server exists.
+    Window(int width, int height, const std::string& title, bool visible = true,
+           bool offscreen = false);
     ~Window();
 
     Window(const Window&) = delete;
@@ -60,6 +74,18 @@ private:
     float m_accumScroll = 0.0f;
     bool m_prevKey[512] = {};
     bool m_prevMouse[8] = {};
+
+    // --- display-less (offscreen) mode ---
+    // When m_offscreen, there is no GLFWwindow: m_offCtx owns the GL context and
+    // every GLFW-touching method short-circuits (close flag instead of GLFW,
+    // stored framebuffer size, steady_clock time, no-op input/swap/poll).
+    // raw ptr: the type is absent in a default build, and it's only touched in
+    // LIMINAL_HAS_OFFSCREEN paths — [[maybe_unused]] silences the default build.
+    [[maybe_unused]] OffscreenContext* m_offCtx = nullptr;
+    bool m_offscreen = false;
+    bool m_closeFlag = false;
+    int m_offW = 0, m_offH = 0;
+    long long m_offStartNs = 0; // steady_clock baseline for time()
 };
 
 } // namespace liminal

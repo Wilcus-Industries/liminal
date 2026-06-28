@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -129,10 +130,13 @@ bool isKnownBinaryExt(const std::string& extLower) {
 
 } // namespace
 
-EditorApp::EditorApp(std::string projectFile, bool startEmpty)
-    : m_window(1600, 950, "liminal editor"),
+EditorApp::EditorApp(std::string projectFile, bool startEmpty, bool headless,
+                     bool offscreen)
+    : m_window(1600, 950, "liminal editor", /*visible=*/!headless,
+               /*offscreen=*/headless && offscreen),
       m_renderer(),
       m_imgui(m_window) {
+    m_headless = headless;
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
     // Persist the dock layout to a stable per-user file instead of ImGui's
@@ -211,6 +215,13 @@ EditorApp::EditorApp(std::string projectFile, bool startEmpty)
     // -> scanShaders rebuilds it with discovered user shaders.
     shaderCatalog() = {"native", "retro"};
     log("[editor] liminal editor started");
+
+    // Headless: open (or auto-scaffold) the project directly. The landing
+    // chooser is GUI-only, so a project path is required (enforced in main()).
+    if (m_headless) {
+        openOrCreateProject(projectFile);
+        return;
+    }
 
     // Screen selection: a project path opens straight into the editor; --empty
     // opens a blank editor scene; otherwise show the landing / project chooser.
@@ -319,6 +330,67 @@ void EditorApp::run() {
         m_window.swapBuffers();
     }
 }
+
+void EditorApp::runHeadless() {
+    // Engine-only mirror of run(): no ImGui, no panels, no swapBuffers. The MCP
+    // server (started in openProject) is the sole driver — an external agent
+    // pokes it over HTTP; pump() runs those tool tasks here on the main thread.
+    using clock = std::chrono::steady_clock;
+    const auto frameBudget = std::chrono::milliseconds(33); // ~30 fps cap
+    double last = m_window.time();
+    while (!m_window.shouldClose()) {
+        const auto frameStart = clock::now();
+        m_window.pollEvents(); // keeps GLFW serviced even hidden
+        const double now = m_window.time();
+        m_dt = std::min(float(now - last), 0.1f);
+        last = now;
+
+        // Drain MCP tool tasks on the main thread so they read scene state
+        // safely (the http threads parked them here — see mcp_server.hpp).
+        if (m_mcp) m_mcp->pump();
+
+        // Hot-reload custom shaders edited on disk (throttled ~0.5s inside).
+        tickShaderWatch();
+
+        if (m_mode == Mode::Play && !m_paused && m_scripts)
+            m_scripts->update(m_scene, m_dt);
+
+        // Deferred lm.scene.change swap (Play only) — same as run(): swap after
+        // the update so running scripts finish, then rebuild the host. The
+        // pre-Play snapshot is left untouched so Stop restores the original.
+        if (m_mode == Mode::Play && !m_pendingPlayScene.empty()) {
+            const std::string path = m_pendingPlayScene;
+            m_pendingPlayScene.clear();
+            try {
+                Scene loaded = Scene::load(Assets::resolve(path));
+                m_scene = std::move(loaded);
+                m_selected = entt::null; // entt ids reset on load
+                buildPlayScriptHost();   // fresh instances vs the new scene
+                log("[editor] play: scene -> " + path);
+            } catch (const std::exception& ex) {
+                log(std::string("[script] lm.scene.change failed: ") +
+                    ex.what());
+            }
+        }
+
+        // Render the scene into the offscreen FBO so the screenshot / focus
+        // tools reflect live state. There is no visible surface to blit to.
+        m_view = currentView();
+        int fbw = 0, fbh = 0;
+        m_window.framebufferSize(fbw, fbh);
+        m_renderer.beginFrame(m_view, fbw, fbh);
+        m_proj = m_renderer.projection();
+        renderScene();
+        m_renderer.endFrame(fbw, fbh);
+
+        // No vsync on a hidden window — cap the loop so we don't busy-spin.
+        const auto elapsed = clock::now() - frameStart;
+        if (elapsed < frameBudget)
+            std::this_thread::sleep_for(frameBudget - elapsed);
+    }
+}
+
+void EditorApp::requestQuit() { m_window.requestClose(); }
 
 // --- landing screen ----------------------------------------------------------
 
@@ -596,22 +668,28 @@ void EditorApp::createProject(const std::string& parentDir,
         return;
     }
     const fs::path root = fs::path(parentDir) / name;
+    if (!scaffoldProject(root, name)) return; // logged inside
+    log("[editor] created project: " + root.string());
+    openProject(root.string()); // flips to the editor + records the recent
+}
+
+bool EditorApp::scaffoldProject(const fs::path& root, const std::string& title) {
     std::error_code ec;
     fs::create_directories(root / "scenes", ec);
     if (ec) {
-        log("[editor] create project failed: " + ec.message());
-        return;
+        log("[editor] scaffold project failed: " + ec.message());
+        return false;
     }
 
     // project.ljson — assetRoot is the project dir; startupScene relative to it.
     {
         nlohmann::json pj = {{"assetRoot", "."},
                              {"startupScene", "scenes/main.lscene"},
-                             {"title", name}};
+                             {"title", title}};
         std::ofstream out(root / "project.ljson");
         if (!out) {
-            log("[editor] create project: cannot write project.ljson");
-            return;
+            log("[editor] scaffold project: cannot write project.ljson");
+            return false;
         }
         out << pj.dump(4) << '\n';
     }
@@ -629,12 +707,33 @@ void EditorApp::createProject(const std::string& parentDir,
         Entity light = s.create("light");
         light.add(Transform{.position = {3.0f, 5.0f, 2.0f}});
         light.add(Light{});
-        if (!s.save((root / "scenes" / "main.lscene").string()))
-            log("[editor] create project: failed to write default scene");
+        if (!s.save((root / "scenes" / "main.lscene").string())) {
+            log("[editor] scaffold project: failed to write default scene");
+            return false;
+        }
     }
+    return true;
+}
 
-    log("[editor] created project: " + root.string());
-    openProject(root.string()); // flips to the editor + records the recent
+void EditorApp::openOrCreateProject(const std::string& projectDir) {
+    fs::path p = fs::absolute(projectDir);
+    // openProject resolves a dir -> dir/project.ljson; mirror that to decide
+    // whether to scaffold first.
+    const fs::path manifest =
+        fs::is_directory(p) ? (p / "project.ljson") : p;
+    if (!fs::exists(manifest)) {
+        // Empty / new dir (or a missing path): scaffold a fresh project into the
+        // dir itself, titled after its folder name. For a file path, scaffold
+        // into its parent dir.
+        const fs::path root =
+            fs::is_directory(p) || !p.has_extension() ? p : p.parent_path();
+        log("[editor] headless: no project at " + manifest.string() +
+            " -> scaffolding new project");
+        if (!scaffoldProject(root, root.filename().string())) return;
+        openProject(root.string());
+        return;
+    }
+    openProject(p.string());
 }
 
 glm::mat4 EditorApp::currentView() {
@@ -1991,6 +2090,9 @@ void EditorApp::doRedo() {
 }
 
 void EditorApp::log(const std::string& line) {
+    // Headless has no Console panel — echo to stdout so the MCP URL, project
+    // open, and script/build logs are visible to whoever launched the process.
+    if (m_headless) std::fprintf(stdout, "%s\n", line.c_str()), std::fflush(stdout);
     m_console.push_back(line);
     if (m_console.size() > 2000)
         m_console.erase(m_console.begin(),
