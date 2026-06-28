@@ -43,7 +43,14 @@ Dependencies fetched via `cmake/Dependencies.cmake` (FetchContent): GLFW, glad, 
 include/liminal/          public headers (mirrors src/), umbrella: liminal.hpp
 src/
   core/      App (main loop, owns everything; ctor takes a ScriptContext, not a
-             Window*), Window (GLFW+glad RAII, input), Assets (search-path resolution
+             Window*), Window (GLFW+glad RAII, input; carries a SYNTHETIC input
+             layer — setSyntheticKey/setSyntheticMouse(key,down,holdSeconds=0)/
+             injectMouseLook/setSyntheticCapture/clearSyntheticInput/
+             tickSyntheticInput(now) — that ORs into the live GLFW reads in
+             keyDown/mouseDown/mouseDelta/cursorCaptured and works even offscreen,
+             so an MCP agent can drive input to "play" the game; holdSeconds>0
+             arms an auto-release deadline that tickSyntheticInput expires. Backs
+             the send_input MCP tool), Assets (search-path resolution
              + VFS: readFile / mountPak read through a mounted pak first), AssetCache
              (name → GPU resource, "builtin:"-prefixed procedural meshes/textures,
              warn-once failures; addMesh returns the stored "runtime:" key;
@@ -339,7 +346,7 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              tickShaderWatch() + (in Play) m_scripts->update + the deferred
              lm.scene.change swap + scene render into the FBO, NO
              beginFrame/drawUi/endFrame/swapBuffers, ~30fps sleep cap (no vsync).
-             The MCP server (startMcpServer, ALL ~30 tools incl. screenshot via
+             The MCP server (startMcpServer, ALL ~31 tools incl. screenshot via
              the offscreen FBO, .mcp.json + liminal-lua skill seeding) is the sole
              driver — an external `claude`/MCP client pointed at the project dir
              runs it; nothing editor-specific is stubbed (selection/console/camera
@@ -568,6 +575,19 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              newScene getters): play_game (no input → startPlay, returns
              {mode,paused}), pause_game (input {paused?:boolean} default true →
              pause/resume, errors if not playing), stop_game (no input → stopPlay),
+             send_input (AGENT AUTOPILOT; Play-only, errors "not playing" in Edit
+             → via McpProvider.sendInput feeds SYNTHETIC input into the running
+             game so the agent can play it: input {keys_down?,keys_up?:string[]
+             (single chars → GLFW ASCII codes, or names space/shift/ctrl/alt/enter/
+             tab/esc/arrows), mouse_down?,mouse_up?:int[] (0=left), look_dx?,look_dy?
+             :number (one-shot mouse-look delta), hold_ms?:number (0=hold until
+             released, >0=auto-release after N ms), capture?:bool (force
+             cursor_captured() true for FPS look gating)} → {ok,applied}. The
+             provider lambda maps key names + calls Window::setSyntheticKey/
+             setSyntheticMouse/injectMouseLook/setSyntheticCapture. Agent play loop
+             = play_game → repeat[send_input → screenshot → reason] → stop_game;
+             works in interactive Play (ORs with human input) AND --headless (sole
+             input source) so an external MCP client plays fully autonomously),
              reload_scene (no input → openScene(m_scenePath); discards live
              in-memory edits and auto-stops Play, reloading from disk), save_scene
              (input {path?:string}, empty → current m_scenePath → m_scene.save),
@@ -604,7 +624,7 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              components, returns {ok,id,name}). All mutations are live/in-memory —
              persist with save_scene (no auto-save). Errors: "entity not found" /
              "unknown component: X" / missing-required-arg as a text error block.
-             ~30 tools total (mcp_server.cpp toolSchemas() + callTool() if-chain,
+             ~31 tools total (mcp_server.cpp toolSchemas() + callTool() if-chain,
              one McpProvider getter each wired in startMcpServer()).
              Port: tries 7717 then up to 15 more,
              reports the bound port; 0 = none bound (non-fatal). Started on first

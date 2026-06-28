@@ -169,8 +169,9 @@ void Window::framebufferSize(int& w, int& h) const {
 }
 
 bool Window::keyDown(int key) const {
-    if (m_offscreen) return false;
     if (key < 0 || key > GLFW_KEY_LAST) return false;
+    if (key < 512 && m_synthKey[key]) return true; // agent-held overrides
+    if (m_offscreen) return false;
     return glfwGetKey(m_window, key) == GLFW_PRESS;
 }
 
@@ -184,8 +185,9 @@ bool Window::keyPressed(int key) {
 }
 
 bool Window::mouseDown(int button) const {
-    if (m_offscreen) return false;
     if (button < 0 || button > GLFW_MOUSE_BUTTON_LAST) return false;
+    if (button < 8 && m_synthMouse[button]) return true; // agent-held overrides
+    if (m_offscreen) return false;
     return glfwGetMouseButton(m_window, button) == GLFW_PRESS;
 }
 
@@ -215,15 +217,63 @@ void Window::setCursorCaptured(bool captured) {
 }
 
 void Window::mouseDelta(float& dx, float& dy) {
-    if (m_offscreen) {
-        dx = 0.0f;
-        dy = 0.0f;
-        return;
-    }
-    dx = m_accumDX;
-    dy = m_accumDY;
+    // Real accum is zero offscreen; the synthetic look delta is added either way
+    // so an agent can drive mouse-look with or without a window.
+    dx = m_accumDX + m_synthDX;
+    dy = m_accumDY + m_synthDY;
     m_accumDX = 0.0f;
     m_accumDY = 0.0f;
+    m_synthDX = 0.0f;
+    m_synthDY = 0.0f;
+}
+
+void Window::setSyntheticKey(int key, bool down, double holdSeconds) {
+    if (key < 0 || key >= 512) return;
+    m_synthKey[key] = down;
+    m_synthKeyDeadline[key] =
+        (down && holdSeconds > 0.0) ? time() + holdSeconds : 0.0;
+}
+
+void Window::setSyntheticMouse(int button, bool down, double holdSeconds) {
+    if (button < 0 || button >= 8) return;
+    m_synthMouse[button] = down;
+    m_synthMouseDeadline[button] =
+        (down && holdSeconds > 0.0) ? time() + holdSeconds : 0.0;
+}
+
+void Window::injectMouseLook(float dx, float dy) {
+    m_synthDX += dx;
+    m_synthDY += dy;
+}
+
+void Window::clearSyntheticInput() {
+    for (int i = 0; i < 512; ++i) {
+        m_synthKey[i] = false;
+        m_synthKeyDeadline[i] = 0.0;
+    }
+    for (int i = 0; i < 8; ++i) {
+        m_synthMouse[i] = false;
+        m_synthMouseDeadline[i] = 0.0;
+    }
+    m_synthDX = m_synthDY = 0.0f;
+    m_synthCapture = false;
+}
+
+void Window::tickSyntheticInput(double now) {
+    for (int i = 0; i < 512; ++i) {
+        if (m_synthKey[i] && m_synthKeyDeadline[i] > 0.0 &&
+            now >= m_synthKeyDeadline[i]) {
+            m_synthKey[i] = false;
+            m_synthKeyDeadline[i] = 0.0;
+        }
+    }
+    for (int i = 0; i < 8; ++i) {
+        if (m_synthMouse[i] && m_synthMouseDeadline[i] > 0.0 &&
+            now >= m_synthMouseDeadline[i]) {
+            m_synthMouse[i] = false;
+            m_synthMouseDeadline[i] = 0.0;
+        }
+    }
 }
 
 double Window::time() const {

@@ -120,6 +120,7 @@ needs `save_scene` to persist).
 | `play_game` | — | `{mode,paused}` | control |
 | `pause_game` | `{paused?}` (default true) | `{mode,paused}` | control |
 | `stop_game` | — | `{mode,paused}` (restores pre-Play scene) | control |
+| `send_input` | `{keys_down?,keys_up?,mouse_down?,mouse_up?,look_dx?,look_dy?,hold_ms?,capture?}` | `{ok,applied}` (Play only) | control |
 | `open_scene` | `{path}` | `{ok,scenePath}` (auto-stops Play) | control |
 | `new_scene` | — | `{ok}` (blank, unsaved) | control |
 | `reload_scene` | — | `{ok,scenePath}` (re-reads disk, discards live edits) | control |
@@ -141,6 +142,40 @@ Notes:
   window (you get a timeout); the build still completes — poll `console_log`.
 - `raycast` resolves over each entity's `Collider` (or mesh bounds); the same
   query `lm.physics.raycast` does at runtime.
+
+### Playing the game yourself (`send_input`)
+
+You can **play the running game**, not just start it. The loop:
+
+1. `play_game` — enter Play (scripts run).
+2. `send_input` — inject keyboard/mouse the scripts read via `lm.input.*`.
+3. `screenshot` — observe the result; decide the next move.
+4. Repeat 2–3, then `stop_game`.
+
+`send_input` fields (all optional, batched in one call):
+- `keys_down` / `keys_up` — key names: single chars (`"w"`,`"a"`) or
+  `space`,`shift`,`ctrl`,`alt`,`enter`,`tab`,`esc`,`up`,`down`,`left`,`right`.
+- `mouse_down` / `mouse_up` — button indices (`0`=left,`1`=right,`2`=middle).
+- `look_dx` / `look_dy` — a one-shot mouse-look delta (for `lm.input.mouse_delta`).
+- `hold_ms` — auto-release the pressed keys/buttons after N ms. **`0` (default)
+  = held until you release** with a matching `keys_up`/`mouse_up`. Use a hold for
+  sustained movement ("walk while I look around"), `hold_ms` for a discrete tap
+  (jump, shoot).
+- `capture: true` — make `lm.input.cursor_captured()` report true so FPS scripts
+  that gate mouse-look on capture respond. Set it once after `play_game`.
+
+Injected input **ORs with** any real input — in a normal editor window it adds to
+human keys; in `--headless` it is the only source, so an agent plays fully
+autonomously over HTTP. Held keys are auto-released on `stop_game`.
+
+Example — walk forward a beat, then stop:
+```
+play_game
+send_input {"keys_down":["w"],"capture":true}
+screenshot                    # see the world move
+send_input {"keys_up":["w"]}
+stop_game
+```
 
 ### Live vs persisted
 
