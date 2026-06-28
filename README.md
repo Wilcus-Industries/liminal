@@ -62,3 +62,11 @@ cmake --build build -j
 cmake -B build
 cmake --build build --config Release -j
 ```
+
+## Changelog
+
+### v0.2.2
+
+- Headless mode: run the editor with no GUI, driven entirely over MCP — plus a display-less offscreen rendering backend (EGL/OSMesa) for bare CI/SSH boxes with no display server.
+- Agent bootstrap skill + global MCP auto-connect, so a fresh agent in any directory can discover and launch Liminal.
+- Agent synthetic input: an agent can now "play" a running game by injecting keyboard/mouse input over MCP.
