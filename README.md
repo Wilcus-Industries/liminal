@@ -10,14 +10,6 @@ The game engine for agents.
 
 </div>
 
-## Headless Mode
-
-Liminal can be run in headless mode, without a user interface. This allows the agent to develop games completely without any graphical interface.
-
-Your agent will be able to take screenshots, and interact with the normal editor buttons and panels, just like in the regular editor, without any graphical interface.
-
-This is useful for running the agent on a GUI-less server or in a CI/CD pipeline.
-
 ## Compatible With
 
 - Claude, Codex, any agent with MCP+skill support.
@@ -26,12 +18,10 @@ This is useful for running the agent on a GUI-less server or in a CI/CD pipeline
 ## Features
 
 - Full-fledged editor.
-- LLM inference built in (GGUF models).
+- Headless mode for agentic development on no-GUI environments.
 - Procedural generation built in. (Wave function collapse, terrain, shape-grammar architecture, etc.)
+- LLM inference built in (GGUF models).
 - Audio with procedural DSP voice bank.
-- Fully static shipping builds.
-- Built in Claude Code support in the editor (MCP workspace, Lua `lm` library skill for scripting)
-- ECS system built in (EnTT).
 
 ## Installing
 
