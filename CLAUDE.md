@@ -58,7 +58,9 @@ src/
              platform (selfExePath/selfExeDir; openUrl — OS default handler via
              open/xdg-open/ShellExecute, used by the editor landing-screen repo
              link; userConfigDir — ~/.liminal or %APPDATA%/liminal, created on
-             first use, backs the editor recent-projects file),
+             first use, backs the editor recent-projects file; userHomeDir —
+             $HOME / %USERPROFILE%, NOT created, backs the editor agent-skill
+             install under ~/.claude etc.),
              pty (liminal::Pty: RAII pseudo-terminal — forkpty on macOS/Linux,
              TERM=xterm-256color child env, optional cwd arg (child chdir()s
              before exec, non-fatal on fail), O_NONBLOCK master, read/write/
@@ -317,7 +319,14 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              by canonical path, capped 15). openProject records the project +
              flips m_screen to Editor. CLI: no args = landing, --project <p> opens
              straight into the editor, --empty = blank editor scene,
-             --headless --project <p> = GUI-less mode (below).
+             --headless --project <p> = GUI-less mode (below). --mcp-port <n>
+             pins the MCP server to that exact port (deterministic bind, no
+             probe; threaded EditorApp ctor → m_mcpPort → McpServer::start(port,
+             exact=true)). --install-skill[=claude|codex|generic|all] [--force]
+             installs the agent BOOTSTRAP skill into the agent's global ~/
+             convention dir and exits (no editor launch); --agent-help /
+             --print-skill prints that skill (binary path + port stamped in) to
+             stdout and exits. See AGENT BOOTSTRAP below.
              HEADLESS MODE (--headless, editor/main.cpp): runs the SAME EditorApp
              with a HIDDEN GL window (Window ctor gained a `visible` param =
              GLFW_VISIBLE off + vsync off — the context + offscreen FBO still work
@@ -620,7 +629,39 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              `"liminal_scene": 1` version key, entities/components layout, exact
              per-component field names) so the `claude` in the Terminal panel can
              drive the editor over MCP, author scripts, AND hand-write/repair scene
-             files accurately. Has a table of contents.
+             files accurately. Has a table of contents. (It also has a "Launching
+             the editor (headless)" subsection: the --headless --project [--mcp-port]
+             command, the stdout MCP URL, the curl JSON-RPC recipe, and the
+             native-MCP/`/mcp`-reconnect note — for the reopen case.)
+             AGENT BOOTSTRAP (editor/agent_install.{hpp,cpp}, ns liminal::editor;
+             baked editor/skills/liminal/SKILL.md via LIMINAL_EDITOR_BOOTSTRAP_SKILL):
+             solves the chicken-and-egg where the per-project liminal-lua skill +
+             .mcp.json only exist AFTER a project is open — so a fresh `claude` in
+             an empty dir has nothing telling it liminal exists or how to launch it.
+             A small, AGENT-NEUTRAL launcher doc (distinct from liminal-lua: what
+             liminal is, the --headless launch, the curl JSON-RPC connect recipe,
+             then defer to the seeded liminal-lua skill) is installed into an
+             agent's GLOBAL convention dir. installAgentSkill(target, mcpPort, force)
+             resolves the baked source via resolveResource (dev/.app), stamps
+             {{LIMINAL_EDITOR}} = selfExePath() + {{MCP_PORT}} into the body, writes
+             never-clobber (unless force) — Claude → ~/.claude/skills/liminal/
+             SKILL.md (frontmatter kept), Codex → ~/.codex/liminal-bootstrap.md,
+             Generic → ~/.config/liminal/agent-bootstrap.md (both frontmatter-
+             stripped). For Claude it ALSO merges a user-scope `liminal` HTTP MCP
+             entry into ~/.claude.json (parse-and-merge like writeMcpJson, but
+             REFUSES to clobber an unparseable config — it's the user's whole Claude
+             config) pointing at the pinned port, so `editor running → open claude`
+             auto-connects in ANY dir with zero reconnect. Reconnect gotcha
+             workaround = pin port (--mcp-port → deterministic bind) + the curl
+             fallback documented in the skill (the agent drives tools/call over
+             Bash with no MCP integration + no reconnect — the real "around" for a
+             mid-session launch). Delivery: (1) auto-install-once on first project
+             open (openProject, after startMcpServer, guarded by m_agentSkillSeeded,
+             uses the actually-bound m_mcp->port()); (2) Tools menu → "Install Agent
+             Skill" (force-overwrite, same seam); (3) CLI --install-skill /
+             --agent-help (main.cpp, before EditorApp ctor). parseAgentTargets()
+             handles claude|codex|generic|all. macOS bundle ships
+             Resources/skills/liminal/SKILL.md (pack_macos.cmake, BOOTSTRAP_SKILL_MD).
              Custom shader discovery (scanShaders): on project open the editor
              scans `<projectDir>/shaders/` and registers a pack per entry, then
              rebuilds shaderCatalog() = {"native","retro", ...discovered} for the

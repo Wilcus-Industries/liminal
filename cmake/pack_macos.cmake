@@ -2,7 +2,7 @@
 #
 # Driven by the `package-mac` custom target (editor/CMakeLists.txt), invoked as
 # `cmake -P cmake/pack_macos.cmake` with these -D variables:
-#   EDITOR_EXE  PLAYER_EXE  FONT_TTF  EMOJI_TTF  SKILL_MD
+#   EDITOR_EXE  PLAYER_EXE  FONT_TTF  EMOJI_TTF  SKILL_MD  BOOTSTRAP_SKILL_MD
 #   OUT_DIR  VERSION
 #
 # Layout produced (matches editor/resource_paths.hpp resolution):
@@ -10,7 +10,7 @@
 #     Info.plist
 #     MacOS/{liminal-editor, liminal-player}
 #     Resources/{JetBrainsMono.ttf, NotoColorEmoji.ttf,
-#                skills/liminal-lua/SKILL.md}
+#                skills/liminal-lua/SKILL.md, skills/liminal/SKILL.md}
 
 if(NOT EXISTS "${EDITOR_EXE}")
     message(FATAL_ERROR "editor binary not found: ${EDITOR_EXE} (build liminal-editor first)")
@@ -56,6 +56,13 @@ endif()
 if(SKILL_MD AND EXISTS "${SKILL_MD}")
     file(MAKE_DIRECTORY "${res}/skills/liminal-lua")
     file(COPY "${SKILL_MD}" DESTINATION "${res}/skills/liminal-lua")
+endif()
+
+# The agent bootstrap (launcher) skill — resolved by agent_install.cpp via the
+# same ../Resources/skills/liminal/SKILL.md relocatable lookup.
+if(BOOTSTRAP_SKILL_MD AND EXISTS "${BOOTSTRAP_SKILL_MD}")
+    file(MAKE_DIRECTORY "${res}/skills/liminal")
+    file(COPY "${BOOTSTRAP_SKILL_MD}" DESTINATION "${res}/skills/liminal")
 endif()
 
 # App icon: build a Liminal.icns from the per-size PNGs in ICON_DIR and drop it

@@ -361,7 +361,7 @@ McpServer::~McpServer() {
     // Anyone still blocked in marshal() will time out and take the fallback.
 }
 
-int McpServer::start(int preferred) {
+int McpServer::start(int preferred, bool exact) {
     if (m_running) return m_port;
 
     m_svr = std::make_unique<httplib::Server>();
@@ -390,17 +390,25 @@ int McpServer::start(int preferred) {
         res.set_content(reply.dump(), "application/json");
     });
 
-    // Find a free port: preferred first, then a few sequential fallbacks.
+    // Find a free port: preferred first, then a few sequential fallbacks —
+    // unless `exact`, where only `preferred` is tried (a pre-registered URL must
+    // match exactly).
+    const int span = exact ? 1 : 16;
     int chosen = 0;
-    for (int p = preferred; p < preferred + 16; ++p) {
+    for (int p = preferred; p < preferred + span; ++p) {
         if (m_svr->bind_to_port("127.0.0.1", p)) {
             chosen = p;
             break;
         }
     }
     if (chosen == 0) {
-        logLine("[mcp] could not bind any port in [" + std::to_string(preferred) +
-                ", " + std::to_string(preferred + 16) + ")");
+        if (exact)
+            logLine("[mcp] could not bind requested port " +
+                    std::to_string(preferred) + " (in use?)");
+        else
+            logLine("[mcp] could not bind any port in [" +
+                    std::to_string(preferred) + ", " +
+                    std::to_string(preferred + span) + ")");
         m_svr.reset();
         return 0;
     }

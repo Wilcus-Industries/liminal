@@ -110,4 +110,16 @@ std::filesystem::path userConfigDir() {
     return base;
 }
 
+std::filesystem::path userHomeDir() {
+#if defined(_WIN32)
+    if (const char* up = std::getenv("USERPROFILE")) return fs::path(up);
+    const char* drive = std::getenv("HOMEDRIVE");
+    const char* path = std::getenv("HOMEPATH");
+    if (drive && path) return fs::path(std::string(drive) + path);
+#else
+    if (const char* home = std::getenv("HOME")) return fs::path(home);
+#endif
+    return {};
+}
+
 } // namespace liminal

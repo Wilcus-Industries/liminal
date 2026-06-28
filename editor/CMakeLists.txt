@@ -25,6 +25,7 @@ add_executable(liminal-editor
     lua_complete.cpp
     terminal_panel.cpp
     mcp_server.cpp
+    agent_install.cpp
     update_check.cpp
     ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp
     ${imguicolortextedit_SOURCE_DIR}/TextEditor.cpp
@@ -48,7 +49,7 @@ target_include_directories(liminal-editor PRIVATE
 set_source_files_properties(
     main.cpp editor_app.cpp recent_projects.cpp theme.cpp
     script_editor.cpp lua_complete.cpp terminal_panel.cpp mcp_server.cpp
-    update_check.cpp
+    agent_install.cpp update_check.cpp
     PROPERTIES COMPILE_OPTIONS "${LIMINAL_WARNING_FLAGS}")
 
 # glfw for GLFW_KEY_* constants; liminal_imgui already carries the ImGui
@@ -87,6 +88,21 @@ else()
         LIMINAL_EDITOR_LUA_SKILL="")
 endif()
 
+# Bakes the path to the agent BOOTSTRAP skill (editor/skills/liminal/). Unlike
+# liminal-lua (seeded per-project once the editor is open), this small launcher
+# doc is installed into the agent's GLOBAL convention dir (~/.claude/skills/...)
+# so a fresh agent in an empty dir can discover how to launch + connect to the
+# headless editor. Empty when missing -> installation is skipped.
+set(LIMINAL_EDITOR_BOOTSTRAP_SKILL
+    "${CMAKE_CURRENT_SOURCE_DIR}/skills/liminal/SKILL.md")
+if(EXISTS "${LIMINAL_EDITOR_BOOTSTRAP_SKILL}")
+    target_compile_definitions(liminal-editor PRIVATE
+        LIMINAL_EDITOR_BOOTSTRAP_SKILL="${LIMINAL_EDITOR_BOOTSTRAP_SKILL}")
+else()
+    target_compile_definitions(liminal-editor PRIVATE
+        LIMINAL_EDITOR_BOOTSTRAP_SKILL="")
+endif()
+
 # Bakes the JetBrains Mono path fetched in cmake/Dependencies.cmake; the editor
 # loads it as its default ImGui font (existence is re-checked at runtime).
 if(LIMINAL_JETBRAINS_MONO_TTF)
@@ -118,6 +134,7 @@ if(APPLE AND LIMINAL_BUILD_PLAYER)
             -DFONT_TTF=${LIMINAL_JETBRAINS_MONO_TTF}
             -DEMOJI_TTF=${LIMINAL_NOTO_EMOJI_TTF}
             -DSKILL_MD=${LIMINAL_EDITOR_LUA_SKILL}
+            -DBOOTSTRAP_SKILL_MD=${LIMINAL_EDITOR_BOOTSTRAP_SKILL}
             -DICON_DIR=${CMAKE_SOURCE_DIR}/assets/icons/macos/${LIMINAL_MACOS_ICON_VARIANT}
             -DOUT_DIR=${CMAKE_BINARY_DIR}/dist
             -DVERSION=${PROJECT_VERSION}

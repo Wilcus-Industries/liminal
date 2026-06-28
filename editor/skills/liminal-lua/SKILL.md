@@ -38,6 +38,37 @@ only MCP can see/mutate the live scene the human has open and drive Play.
 
 ## Driving liminal as an agent (MCP)
 
+### Launching the editor (headless)
+
+If the editor isn't already running, bring it up GUI-less and drive it over MCP.
+An empty/new directory is auto-scaffolded into a project:
+
+```sh
+liminal-editor --headless --project <dir> [--mcp-port 7717] &
+```
+
+It runs until killed (SIGINT/SIGTERM) and echoes logs to **stdout**, including:
+
+```
+[mcp] server listening at http://127.0.0.1:<port>/mcp
+```
+
+Two ways to connect:
+
+- **curl (no reconnect, works mid-session):** the server is JSON-RPC 2.0 over a
+  single `POST /mcp`, plaintext on localhost. Drive any tool straight from the
+  shell, e.g. `tools/call`:
+  ```sh
+  curl -s -X POST http://127.0.0.1:<port>/mcp -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+         "params":{"name":"scene_tree","arguments":{}}}'
+  ```
+  (First send `initialize`, then `tools/list` / `tools/call`.)
+- **Native MCP:** the editor wrote `<dir>/.mcp.json` registering the `liminal`
+  server. A session that **started after** the editor was running auto-connects.
+  If you launched it mid-session, your runtime won't see it until it reloads MCP
+  config (in Claude Code: `/mcp`, or restart) — use curl until then.
+
 ### The build loop
 
 The reliable agent loop for building/iterating a scene:

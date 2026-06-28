@@ -57,8 +57,12 @@ public:
     // DISPLAY-LESS GL context (EGL/OSMesa, no window/display server) instead of a
     // hidden GLFW window; requires an offscreen backend compiled in, else Window
     // falls back to the hidden window.
+    // mcpPort>0 pins the in-editor MCP server to that exact port (deterministic
+    // bind, no fallback probe) so a pre-registered URL stays valid; 0 = the
+    // default 7717-then-probe behaviour.
     explicit EditorApp(std::string projectFile, bool startEmpty = false,
-                       bool headless = false, bool offscreen = false);
+                       bool headless = false, bool offscreen = false,
+                       int mcpPort = 0);
     ~EditorApp(); // out-of-line: m_audio holds an incomplete Audio
     void run();
     // Engine-only loop for --headless: MCP pump + script update (in Play) +
@@ -318,6 +322,13 @@ private:
     // True for the --headless CLI path: hidden GL window, no ImGui, runHeadless()
     // instead of run(). Set in the ctor before the project is opened.
     bool m_headless = false;
+
+    // >0 pins the MCP server to this exact port (deterministic bind); 0 uses the
+    // default 7717-then-probe. Set from the --mcp-port CLI flag.
+    int m_mcpPort = 0;
+
+    // Guards the once-per-session auto-install of the agent bootstrap skill.
+    bool m_agentSkillSeeded = false;
 
     // --- landing screen ---
     Screen m_screen = Screen::Landing; // start on the chooser unless a project opens

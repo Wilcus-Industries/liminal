@@ -25,4 +25,9 @@ bool openUrl(const std::string& url);
 // (e.g. no $HOME). Used for editor-level state like the recent-projects list.
 std::filesystem::path userConfigDir();
 
+// The user's home directory: $HOME (POSIX) / %USERPROFILE% (Windows). NOT
+// created (it already exists); empty path on failure. Used by the editor to
+// install the agent bootstrap skill under ~/.claude, ~/.codex, etc.
+std::filesystem::path userHomeDir();
+
 } // namespace liminal

@@ -3,6 +3,7 @@
 
 #include "editor_app.hpp"
 
+#include "agent_install.hpp"
 #include "theme.hpp"
 
 #include <imgui.h>
@@ -131,12 +132,13 @@ bool isKnownBinaryExt(const std::string& extLower) {
 } // namespace
 
 EditorApp::EditorApp(std::string projectFile, bool startEmpty, bool headless,
-                     bool offscreen)
+                     bool offscreen, int mcpPort)
     : m_window(1600, 950, "liminal editor", /*visible=*/!headless,
                /*offscreen=*/headless && offscreen),
       m_renderer(),
       m_imgui(m_window) {
     m_headless = headless;
+    m_mcpPort = mcpPort;
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
     // Persist the dock layout to a stable per-user file instead of ImGui's
@@ -1098,6 +1100,18 @@ void EditorApp::drawMenuBar() {
             if (ImGui::MenuItem("New Script Editor")) addPanel(PanelKind::ScriptEditor);
             ImGui::Separator();
             if (ImGui::MenuItem("Reset Layout"))      resetLayout();
+            ImGui::Separator();
+            // Install/repair the global agent bootstrap skill on demand (the same
+            // seam auto-install uses on project open). Forces an overwrite so this
+            // is a deliberate "refresh my install" action.
+            if (ImGui::MenuItem("Install Agent Skill")) {
+                const int port = m_mcp ? m_mcp->port() : kDefaultMcpPort;
+                const auto r =
+                    installAgentSkill(AgentTarget::Claude, port, /*force=*/true);
+                log(std::string("[skill] ") +
+                    (r.ok ? "agent skill installed -> " : "agent skill FAILED: ") +
+                    (r.path.empty() ? r.message : r.path));
+            }
             ImGui::EndMenu();
         }
         ImGui::TextDisabled("| %s%s",
@@ -1760,6 +1774,20 @@ void EditorApp::openProject(const std::string& projectFile) {
     // Bring up the MCP endpoint and (re)write .mcp.json now that the project
     // path / dir are known. Non-fatal if it fails (logged inside).
     startMcpServer();
+
+    // Install the global agent bootstrap skill (once per session) so a fresh
+    // `claude` in any directory knows how to launch + connect to the headless
+    // editor — solves the chicken-and-egg where the per-project liminal-lua skill
+    // only exists after a project is already open. Uses the actually-bound MCP
+    // port so the user-scope ~/.claude.json registration matches. Idempotent,
+    // never clobbers a customized doc; non-fatal.
+    if (!m_agentSkillSeeded) {
+        m_agentSkillSeeded = true;
+        const int port = m_mcp ? m_mcp->port() : kDefaultMcpPort;
+        const auto r = installAgentSkill(AgentTarget::Claude, port);
+        if (r.wrote)
+            log("[skill] installed agent bootstrap skill -> " + r.path);
+    }
 
     // Probe GitHub for a newer stable release (once per editor session). The
     // guard inside makes repeat opens cheap; the warning paints on the menubar.
@@ -2596,7 +2624,10 @@ void EditorApp::startMcpServer() {
 
     m_mcp = std::make_unique<McpServer>(std::move(provider));
     m_mcp->setLogSink([this](const std::string& line) { log(line); });
-    const int port = m_mcp->start(7717);
+    // A pinned --mcp-port binds that exact port (no fallback probe) so a
+    // pre-registered URL stays valid; otherwise 7717-then-probe.
+    const int port = m_mcpPort > 0 ? m_mcp->start(m_mcpPort, /*exact=*/true)
+                                   : m_mcp->start(7717);
     if (port == 0) {
         log("[mcp] server failed to start; Claude Code scene tools unavailable");
         m_mcp.reset();

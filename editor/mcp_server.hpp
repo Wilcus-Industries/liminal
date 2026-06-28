@@ -148,10 +148,12 @@ public:
     McpServer& operator=(const McpServer&) = delete;
 
     // Bind 127.0.0.1 and spin the server thread. Tries `preferred` first, then a
-    // few sequential ports if it's taken. Returns the bound port, or 0 if none
-    // could be bound (logged via the sink). Idempotent: a second call is a no-op
-    // returning the already-bound port.
-    int start(int preferred = 7717);
+    // few sequential ports if it's taken — unless `exact` is set, in which case
+    // ONLY `preferred` is tried (deterministic bind: an agent pre-registered this
+    // exact URL, so falling back to another port would break the registration).
+    // Returns the bound port, or 0 if none could be bound (logged via the sink).
+    // Idempotent: a second call is a no-op returning the already-bound port.
+    int start(int preferred = 7717, bool exact = false);
 
     // Drain + run queued tool tasks on the calling (main) thread. Call once per
     // frame. Fulfills each task's promise so the blocked http thread wakes.
