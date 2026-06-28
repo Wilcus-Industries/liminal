@@ -427,6 +427,53 @@ shared:add(10)   -- visible to every other script that imported it
   player **and** in editor Play (deferred to just after the script update). In
   editor Play, Stop restores the pre-Play scene.
 
+### Coordinate system & camera math
+
+**Read this before writing any movement or camera code.** Most first-person bugs
+(W/S reversed, strafe mirrored, mouse-look inverted) come from guessing the
+forward/right vectors. Don't guess — use the formulas below.
+
+The world is **right-handed**: **+X** right, **+Y** up, **+Z** toward the viewer.
+A camera (or any entity) with zero rotation looks down **−Z**. Rotations are
+degrees, Euler order yaw→pitch→roll = **Y→X→Z** (`rotation.y` = yaw, `.x` = pitch,
+`.z` = roll — see the Transform note above). The engine builds a Transform as
+`T·Ry·Rx·Rz·S` and a Camera's view as `inverse(transform)`, so the world basis a
+script must use, derived from `rotation`, is:
+
+```lua
+local t = self:get_transform()              -- re-fetch every frame, never cache
+local yaw, pitch = math.rad(t.rotation.y), math.rad(t.rotation.x)
+-- forward the entity faces (full 3D, includes pitch)
+local fwd   = vec3(-math.sin(yaw) * math.cos(pitch),
+                    math.sin(pitch),
+                   -math.cos(yaw) * math.cos(pitch))
+-- horizontal forward (ignore pitch) for walking on the ground plane
+local fwdH  = vec3(-math.sin(yaw), 0, -math.cos(yaw))
+-- right (strafe), always horizontal
+local right = vec3( math.cos(yaw), 0, -math.sin(yaw))
+```
+
+Sanity check: at `yaw=0` `fwdH=(0,0,-1)`, `right=(1,0,0)`; at `yaw=90°`
+`fwdH=(-1,0,0)`, `right=(0,0,-1)`.
+
+**Movement (WASD):** `W = +fwdH`, `S = -fwdH`, `D = +right`, `A = -right`. Sum the
+keys into a move vector, normalize it (so diagonals aren't faster), then
+`t.position += move * speed * dt`.
+
+**Mouse-look sign rules** (these exact signs are the usual failure points):
+- `yaw   = yaw   - dx * sens` — drag right (`dx>0`) turns right.
+- `pitch = pitch - dy * sens` — mouse up looks up.
+- Clamp `pitch` to about **±89°** so you never flip over the pole.
+- `dx, dy` come from `lm.input.mouse_delta()` and are only non-zero while the
+  cursor is captured (`lm.input.set_cursor_captured(true)`).
+
+**Trap — do NOT copy the engine's C++ editor camera.** The editor's free-fly
+camera (`editor_app.cpp`) uses a *different* internal convention
+(`fwd = (+sin yaw, …, +cos yaw)` via `glm::lookAt`) that does **not** match a
+Transform-driven entity. Use the Lua formulas above, not the C++ editor source.
+
+See the **First-person controller** example at the end for a full script.
+
 ### lm.input
 - `lm.input.key_down(key)` → bool. `key` is a GLFW keycode (number) or a single
   character string (`"w"`, `"A"`). Always false in windowless/headless hosts.
@@ -488,9 +535,9 @@ non-degenerate) else its mesh's local bounds.
   intersect (false if either has no resolvable box).
 
 ```lua
--- eye ray pick
+-- eye ray pick (horizontal forward; see "Coordinate system & camera math")
 local t = self:get_transform()
-local fwd = vec3(math.sin(t.rotation.y), 0, -math.cos(t.rotation.y))
+local fwd = vec3(-math.sin(t.rotation.y), 0, -math.cos(t.rotation.y))
 local hit = lm.physics.raycast(t.position, fwd, 20.0)
 if hit then lm.log("looking at " .. hit.entity.name) end
 ```
@@ -686,7 +733,11 @@ end
 return M
 ```
 
-### Input-driven mover (WASD)
+### World-space mover (WASD, no rotation)
+
+Moves along world axes only — it ignores the entity's facing, so it's NOT a
+first-person controller (for that see below). Fine for a top-down or fixed-camera
+mover.
 
 ```lua
 local speed = 6.0
@@ -703,6 +754,63 @@ function M.on_update(self, dt)
     t.position.x = t.position.x + dx * speed * dt
     t.position.z = t.position.z + dz * speed * dt
     if dx ~= 0 or dz ~= 0 then lm.audio.event("step") end
+end
+
+return M
+```
+
+### First-person controller (mouse-look + WASD)
+
+Drives the entity's Transform with the canonical basis from "Coordinate system &
+camera math". Attach to the **primary Camera** entity (or a parent the camera is
+childed to). Mouse-look + camera-relative movement, correct handedness.
+
+```lua
+local speed = 6.0
+local sens  = 0.12       -- degrees per pixel of mouse movement
+
+local M = {}
+
+function M.on_start(self)
+    lm.input.set_cursor_captured(true)   -- hide + lock cursor for mouse-look
+end
+
+function M.on_update(self, dt)
+    local t = self:get_transform()       -- re-fetch every frame, never cache
+
+    -- Esc releases / recaptures the cursor so the user can reach UI.
+    if lm.input.key_down(256) then       -- 256 = GLFW_KEY_ESCAPE
+        lm.input.set_cursor_captured(false)
+    end
+
+    -- Mouse-look. dx/dy are only non-zero while the cursor is captured.
+    if lm.input.cursor_captured() then
+        local dx, dy = lm.input.mouse_delta()
+        local yaw   = t.rotation.y - dx * sens   -- drag right turns right
+        local pitch = t.rotation.x - dy * sens   -- mouse up looks up
+        if pitch >  89 then pitch =  89 end       -- clamp so we never flip
+        if pitch < -89 then pitch = -89 end
+        t:set_rotation(pitch, yaw, 0)
+    end
+
+    -- Camera-relative movement on the ground plane.
+    local yaw   = math.rad(t.rotation.y)
+    local fwdH  = vec3(-math.sin(yaw), 0, -math.cos(yaw))
+    local right = vec3( math.cos(yaw), 0, -math.sin(yaw))
+
+    local move = vec3(0, 0, 0)
+    if lm.input.key_down("w") then move = move + fwdH  end
+    if lm.input.key_down("s") then move = move - fwdH  end
+    if lm.input.key_down("d") then move = move + right end
+    if lm.input.key_down("a") then move = move - right end
+
+    local len = math.sqrt(move.x*move.x + move.y*move.y + move.z*move.z)
+    if len > 0 then
+        move = move * (speed * dt / len)         -- normalize so diagonals aren't faster
+        t.position.x = t.position.x + move.x
+        t.position.z = t.position.z + move.z
+        lm.audio.event("step")
+    end
 end
 
 return M

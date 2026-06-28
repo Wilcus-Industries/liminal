@@ -629,7 +629,14 @@ editor/      EditorApp: own event loop, viewport = ImGui::Image of renderer FBO
              `"liminal_scene": 1` version key, entities/components layout, exact
              per-component field names) so the `claude` in the Terminal panel can
              drive the editor over MCP, author scripts, AND hand-write/repair scene
-             files accurately. Has a table of contents. (It also has a "Launching
+             files accurately. It also documents the canonical right-handed,
+             -Z-forward camera basis derived from a Transform (yaw=rotation.y):
+             fwd=(-sin yaw,0,-cos yaw), right=(cos yaw,0,-sin yaw), plus the
+             mouse-look sign rules and a full first-person-controller example — so
+             agents stop re-deriving (and mirroring) the handedness when building
+             FPS movement (the engine's C++ editor free-fly camera uses a DIFFERENT
+             +sin/+cos glm::lookAt convention that must NOT be copied into
+             Transform-driven Lua). Has a table of contents. (It also has a "Launching
              the editor (headless)" subsection: the --headless --project [--mcp-port]
              command, the stdout MCP URL, the curl JSON-RPC recipe, and the
              native-MCP/`/mcp`-reconnect note — for the reopen case.)
