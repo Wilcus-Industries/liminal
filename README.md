@@ -65,6 +65,12 @@ cmake --build build --config Release -j
 
 ## Changelog
 
+### v0.2.3
+
+- Build Game fixes: relative output paths resolve against the project dir, directory targets get a sensible filename, the player binary copies reliably on macOS (no more "Operation not supported"), and a build placed in the project root no longer produces an empty pak. The MCP `build_game` tool now reports an honest success flag.
+- MCP: stopped registering a global `~/.claude.json` entry that failed to connect whenever the editor was closed; stale entries from prior installs are now removed automatically. Per-project `.mcp.json` + the headless/curl bootstrap are unchanged.
+- Docs: the scripting skills now warn that `self` is read-only apart from `self.name` — per-entity state belongs on the module table.
+
 ### v0.2.2
 
 - Headless mode: run the editor with no GUI, driven entirely over MCP — plus a display-less offscreen rendering backend (EGL/OSMesa) for bare CI/SSH boxes with no display server.
