@@ -187,8 +187,9 @@ private:
     bool saveScene(const std::string& path);
     // Produce a standalone game: copy liminal-player, append a pak of project
     // assets, make it runnable (codesign on macOS, exec bit on POSIX). Logs each
-    // step to the console; never throws.
-    void buildGame(const std::string& outPath);
+    // step to the console; never throws. Returns true on success, false on any
+    // failure (so the MCP build_game tool can report an honest status).
+    bool buildGame(const std::string& outPath);
     Entity duplicateEntity(entt::entity src);
     void startPlay();
     void stopPlay();

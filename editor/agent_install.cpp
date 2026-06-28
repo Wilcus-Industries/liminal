@@ -70,41 +70,44 @@ Dest destFor(AgentTarget target, const fs::path& home) {
     }
 }
 
-// Merge a user-scope `liminal` HTTP MCP entry into ~/.claude.json, preserving
-// every other key. Refuses to clobber an existing-but-unparseable config (it is
+// Remove any stale user-scope `liminal` HTTP MCP entry from ~/.claude.json.
+//
+// We deliberately do NOT register a global MCP entry: the editor's MCP server
+// is an in-process HTTP server that only listens while the editor runs, so a
+// global `127.0.0.1:<port>` entry is dead whenever the editor is closed —
+// making EVERY `claude` session in EVERY directory fail to connect. Agents
+// reach the server via the per-project `<projectDir>/.mcp.json` (only present
+// inside a liminal project) plus the bootstrap skill's `--headless` launch +
+// curl flow. This helper instead self-heals installs that previously wrote the
+// global entry, by stripping it. Refuses to touch an unparseable config (it is
 // the user's whole Claude Code config — losing it would be destructive).
-void registerUserScopeMcp(const fs::path& home, int port, InstallResult& r) {
+void removeUserScopeMcp(const fs::path& home, InstallResult& r) {
     const fs::path cfg = home / ".claude.json";
-    nlohmann::json doc = nlohmann::json::object();
     std::error_code ec;
-    if (fs::exists(cfg, ec)) {
+    if (!fs::exists(cfg, ec)) return; // nothing to clean
+
+    nlohmann::json doc;
+    {
         std::ifstream in(cfg);
-        if (in) {
-            try {
-                in >> doc;
-            } catch (const std::exception&) {
-                r.message += " (skipped ~/.claude.json: unparseable, not clobbered)";
-                return;
-            }
-            if (!doc.is_object()) {
-                r.message += " (skipped ~/.claude.json: not a JSON object)";
-                return;
-            }
+        if (!in) return;
+        try {
+            in >> doc;
+        } catch (const std::exception&) {
+            return; // unparseable: never clobber the user's whole config
         }
     }
-    if (!doc.contains("mcpServers") || !doc["mcpServers"].is_object())
-        doc["mcpServers"] = nlohmann::json::object();
-    doc["mcpServers"]["liminal"] = {
-        {"type", "http"},
-        {"url", "http://127.0.0.1:" + std::to_string(port) + "/mcp"}};
+    if (!doc.is_object() || !doc.contains("mcpServers") ||
+        !doc["mcpServers"].is_object())
+        return;
+    if (doc["mcpServers"].erase("liminal") == 0) return; // no stale entry
 
     std::ofstream out(cfg);
     if (!out) {
-        r.message += " (could not write ~/.claude.json)";
+        r.message += " (could not rewrite ~/.claude.json)";
         return;
     }
     out << doc.dump(2) << '\n';
-    r.message += " (registered user-scope MCP -> port " + std::to_string(port) + ")";
+    r.message += " (removed stale user-scope liminal MCP entry from ~/.claude.json)";
 }
 
 } // namespace
@@ -183,7 +186,7 @@ InstallResult installAgentSkill(AgentTarget target, int mcpPort, bool force) {
         // for Claude so a re-installed/moved editor keeps the URL correct.
         r.ok = true;
         r.message = "already present (not overwritten)";
-        if (target == AgentTarget::Claude) registerUserScopeMcp(home, mcpPort, r);
+        if (target == AgentTarget::Claude) removeUserScopeMcp(home, r);
         return r;
     }
 
@@ -202,7 +205,7 @@ InstallResult installAgentSkill(AgentTarget target, int mcpPort, bool force) {
     r.ok = true;
     r.wrote = true;
     r.message = force && exists ? "overwritten" : "installed";
-    if (target == AgentTarget::Claude) registerUserScopeMcp(home, mcpPort, r);
+    if (target == AgentTarget::Claude) removeUserScopeMcp(home, r);
     return r;
 }
 
